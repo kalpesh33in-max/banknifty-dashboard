@@ -235,7 +235,7 @@ def draw_dashboard():
 
     # Apply the existing styling function
     styled_table = style_dashboard(df_display, center_strike)
-    st.dataframe(styled_table, use_container_width=True)
+    st.dataframe(styled_table)
 
 def process_queued_data():
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
