@@ -47,7 +47,7 @@ def style_dashboard(df, selected_atm):
                 continue
             style = 'color: black; font-weight: bold;'
             if strike == selected_atm:
-                style += 'background-color: khaki;'
+                style += 'background-color: yellow;'
             elif opt_type == 'ce' and strike < selected_atm:
                 style += 'background-color: palegreen;'
             elif opt_type == 'pe' and strike > selected_atm:
@@ -76,6 +76,12 @@ st.markdown("""
     }
     .stDataFrame {
         width: 100%;
+    }
+    /* Style for table headers */
+    .stDataFrame th {
+        background-color: #E0E0E0; /* Light grey */
+        color: black;
+        font-weight: bold;
     }
     .stDataFrame th, .stDataFrame td {
         max-width: 100px;
