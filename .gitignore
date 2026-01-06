@@ -1,0 +1,20 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+/
+# Cached files
+__pycache__/
+*.pyc
+
+# Data and logs
+bnf_data/
+*.csv
+*.log
+
+# Streamlit secrets
+.streamlit/
+
+# IDE-specific
+.vscode/
+.idea/

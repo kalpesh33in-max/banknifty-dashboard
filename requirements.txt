@@ -1,0 +1,6 @@
+streamlit
+pandas
+websockets
+zoneinfo
+requests
+asyncio
