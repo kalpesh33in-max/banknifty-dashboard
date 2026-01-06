@@ -35,11 +35,51 @@ st.set_page_config(page_title="Bank Nifty OI Scanner", layout="wide")
 
 st.markdown("""
     <style>
-    body { color: #000; background-color: #FFF; }
-    .stDataFrame th { background-color: #E0E0E0; color: black; font-weight: bold; }
-    .stDataFrame th, .stDataFrame td { border: 1px solid #AAA; }
+    /* Force light theme - more assertive */
+    .stApp {
+        background-color: #FFF !important;
+        color: #000 !important;
+    }
+    h1, h2, h3, h4, h5, h6, strong {
+        color: #000 !important;
+    }
+    /* Style for table headers */
+    .stDataFrame th {
+        background-color: #E0E0E0 !important; /* Light grey */
+        color: black !important;
+        font-weight: bold !important;
+    }
+    .stDataFrame th, .stDataFrame td {
+        border: 1px solid #AAA !important;
+        max-width: 100px;
+        min-width: 75px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    /* Custom header bar styling */
+    .st-emotion-cache-1r6dm1x { /* Target Streamlit's main content wrapper for the header */
+        background-color: #4B0082 !important; /* Indigo/Purple */
+        color: white !important;
+        padding: 10px !important;
+        border-radius: 5px !important;
+        margin-bottom: 10px !important;
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+    }
+    .st-emotion-cache-1r6dm1x h1 {
+        color: white !important;
+    }
+    .header-future-price { /* Custom class for future price display */
+        color: white !important;
+        font-size: 1.2em !important;
+        font-weight: bold !important;
+    }
     </style>
 """, unsafe_allow_html=True)
+
+
 
 def style_dashboard(df, selected_atm):
     """Applies color coding for moneyness to the DataFrame."""
@@ -138,28 +178,33 @@ if should_refresh:
         if future_symbol in new_data and new_data[future_symbol]['price'] > 0:
             st.session_state.future_price = new_data[future_symbol]['price']
 
-        # Get the last row of history for RoC calculation
-        last_oi_data = {}
+        # Get the last row of history for RoC calculation for subsequent fetches
+        last_oi_data_for_roc = {}
         if not st.session_state.history_df.empty:
-            last_oi_series = st.session_state.history_df.iloc[-1]
-            last_oi_data = last_oi_series.to_dict()
-
+            last_oi_series = st.session_state.history_df.iloc[-1].drop('time', errors='ignore') # Ensure 'time' is not in series
+            for col_name, roc_value in last_oi_series.items():
+                # Extract strike and type from col_name (e.g., "60100 ce")
+                match = re.match(r'(\d+) (ce|pe)', col_name)
+                if match:
+                    strike_price = match.group(1)
+                    option_type = match.group(2).upper()
+                    symbol_key = f"{EXPIRY_PREFIX}{strike_price}{option_type}"
+                    # Find the actual previous OI for this symbol if stored in session state
+                    last_oi_data_for_roc[symbol_key] = st.session_state.get(symbol_key, {}).get('oi', 0)
+        
         # Create new row for the DataFrame
-        new_row_data = {"time": now.strftime("%H:%M:%S")}
-        new_oi_state = {}
-
+        current_time_str = now.strftime("%H:%M:%S")
+        new_row_data = {"time": current_time_str}
+        
         for symbol in ALL_OPTION_SYMBOLS:
-            # Calculate RoC
             live_oi = new_data.get(symbol, {}).get("oi", 0)
             
-            # For RoC calc, we need the OI from the previous 15-min interval
-            prev_oi = 0
-            if symbol in st.session_state:
-                prev_oi = st.session_state.get(symbol, {}).get('oi', 0)
+            # Use stored OI for RoC calc, or 0 if first run
+            prev_oi_for_roc = last_oi_data_for_roc.get(symbol, 0)
 
             oi_roc = 0.0
-            if prev_oi > 0 and live_oi > 0:
-                oi_roc = ((live_oi - prev_oi) / prev_oi) * 100
+            if prev_oi_for_roc > 0 and live_oi > 0:
+                oi_roc = ((live_oi - prev_oi_for_roc) / prev_oi_for_roc) * 100
 
             # Format for display
             match = re.search(r'(\d+)(CE|PE)$', symbol)
@@ -167,8 +212,8 @@ if should_refresh:
                 col_name = f"{match.group(1)} {match.group(2).lower()}"
                 new_row_data[col_name] = f"{oi_roc:.2f}%"
 
-            # Store current OI for the next run
-            st.session_state[symbol] = {"oi": live_oi}
+            # Store current OI for the next run's RoC calculation
+            st.session_state[symbol] = {"oi": live_oi} # Store in session state for next iteration's prev_oi
 
         # Update history DataFrame
         new_row_df = pd.DataFrame([new_row_data]).set_index('time')
@@ -177,15 +222,23 @@ if should_refresh:
         # Update refresh time
         st.session_state.last_refresh_time = now
 
+    # Ensure ATM strike is set even if not selected yet
+    if 'atm_strike' not in st.session_state or st.session_state.atm_strike not in STRIKE_RANGE:
+        st.session_state.atm_strike = 60100 # Default to a central strike
+
+
 # --- Draw UI ---
+st.markdown("<h1 style='text-align: center; color: white;'>Bank Nifty Interactive OI Dashboard</h1>", unsafe_allow_html=True)
+
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.markdown(f'Banknifty future price:- **{st.session_state.future_price:.2f}**')
+    st.markdown(f'<div class="header-future-price">Banknifty future price:- {st.session_state.future_price:.2f}</div>', unsafe_allow_html=True)
 with col2:
     selected_atm = st.selectbox(
         'strike selection',
         options=list(STRIKE_RANGE),
-        index=list(STRIKE_RANGE).index(st.session_state.get('atm_strike', 60100))
+        index=list(STRIKE_RANGE).index(st.session_state.get('atm_strike', 60100)),
+        label_visibility="collapsed"
     )
     st.session_state.atm_strike = selected_atm
 
