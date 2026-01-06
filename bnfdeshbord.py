@@ -86,17 +86,18 @@ async def fetch_latest_data():
 
             # Listen for data for a short period
             try:
-                async for message in asyncio.timeout(DATA_FETCH_TIMEOUT_SECONDS):
-                    data = json.loads(message)
-                    if data.get("MessageType") == "RealtimeResult":
-                        symbol = data.get("InstrumentIdentifier")
-                        if symbol:
-                            latest_data[symbol] = {
-                                "oi": data.get("OpenInterest", 0),
-                                "price": data.get("LastTradePrice", 0)
-                            }
+                async with asyncio.timeout(DATA_FETCH_TIMEOUT_SECONDS): # Wrap the entire block
+                    async for message in websocket: # This is the awaitable that should be timed out
+                        data = json.loads(message)
+                        if data.get("MessageType") == "RealtimeResult":
+                            symbol = data.get("InstrumentIdentifier")
+                            if symbol:
+                                latest_data[symbol] = {
+                                    "oi": data.get("OpenInterest", 0),
+                                    "price": data.get("LastTradePrice", 0)
+                                }
             except TimeoutError:
-                st.success("Data fetch complete.")
+                st.success("Data fetch complete (timeout reached).")
     except Exception as e:
         st.error(f"An error occurred while fetching data: {e}")
         return None
