@@ -178,42 +178,36 @@ if should_refresh:
         if future_symbol in new_data and new_data[future_symbol]['price'] > 0:
             st.session_state.future_price = new_data[future_symbol]['price']
 
-        # Get the last row of history for RoC calculation for subsequent fetches
-        last_oi_data_for_roc = {}
-        if not st.session_state.history_df.empty:
-            last_oi_series = st.session_state.history_df.iloc[-1].drop('time', errors='ignore') # Ensure 'time' is not in series
-            for col_name, roc_value in last_oi_series.items():
-                # Extract strike and type from col_name (e.g., "60100 ce")
-                match = re.match(r'(\d+) (ce|pe)', col_name)
-                if match:
-                    strike_price = match.group(1)
-                    option_type = match.group(2).upper()
-                    symbol_key = f"{EXPIRY_PREFIX}{strike_price}{option_type}"
-                    # Find the actual previous OI for this symbol if stored in session state
-                    last_oi_data_for_roc[symbol_key] = st.session_state.get(symbol_key, {}).get('oi', 0)
-        
-        # Create new row for the DataFrame
         current_time_str = now.strftime("%H:%M:%S")
         new_row_data = {"time": current_time_str}
         
-        for symbol in ALL_OPTION_SYMBOLS:
-            live_oi = new_data.get(symbol, {}).get("oi", 0)
-            
-            # Use stored OI for RoC calc, or 0 if first run
-            prev_oi_for_roc = last_oi_data_for_roc.get(symbol, 0)
+        # On the very first run, populate with 0% RoC and store the initial OI
+        if st.session_state.history_df.empty:
+            for symbol in ALL_OPTION_SYMBOLS:
+                match = re.search(r'(\d+)(CE|PE)$', symbol)
+                if match:
+                    col_name = f"{match.group(1)} {match.group(2).lower()}"
+                    new_row_data[col_name] = "0.00%"
+                # Store initial OI for the next run
+                live_oi = new_data.get(symbol, {}).get("oi", 0)
+                st.session_state[symbol] = {"oi": live_oi}
+        else: # For subsequent runs, calculate actual RoC
+            for symbol in ALL_OPTION_SYMBOLS:
+                live_oi = new_data.get(symbol, {}).get("oi", 0)
+                # Get the previous OI value that was stored in the last run
+                prev_oi = st.session_state.get(symbol, {}).get('oi', 0)
 
-            oi_roc = 0.0
-            if prev_oi_for_roc > 0 and live_oi > 0:
-                oi_roc = ((live_oi - prev_oi_for_roc) / prev_oi_for_roc) * 100
-
-            # Format for display
-            match = re.search(r'(\d+)(CE|PE)$', symbol)
-            if match:
-                col_name = f"{match.group(1)} {match.group(2).lower()}"
-                new_row_data[col_name] = f"{oi_roc:.2f}%"
-
-            # Store current OI for the next run's RoC calculation
-            st.session_state[symbol] = {"oi": live_oi} # Store in session state for next iteration's prev_oi
+                oi_roc = 0.0
+                if prev_oi > 0 and live_oi > 0:
+                    oi_roc = ((live_oi - prev_oi) / prev_oi) * 100
+                
+                match = re.search(r'(\d+)(CE|PE)$', symbol)
+                if match:
+                    col_name = f"{match.group(1)} {match.group(2).lower()}"
+                    new_row_data[col_name] = f"{oi_roc:.2f}%"
+                
+                # Update the stored OI value for the next run
+                st.session_state[symbol] = {"oi": live_oi}
 
         # Update history DataFrame
         new_row_df = pd.DataFrame([new_row_data]).set_index('time')
