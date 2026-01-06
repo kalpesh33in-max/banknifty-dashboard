@@ -69,18 +69,43 @@ st.set_page_config(page_title="Bank Nifty OI Dashboard", layout="wide")
 
 st.markdown("""
     <style>
+    /* Force light theme */
+    body {
+        color: #000;
+        background-color: #FFF;
+    }
+    .stDataFrame {
+        width: 100%;
+    }
     .stDataFrame th, .stDataFrame td {
         max-width: 100px;
         min-width: 75px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        border: 1px solid #AAA;
+    }
+    /* Header style */
+    .header-container {
+        background-color: #4B0082; /* Indigo/Purple */
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .header-container .title {
+        font-size: 1.5em;
+        font-weight: bold;
+    }
+    .header-container .future-price {
+        font-size: 1.2em;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 Bank Nifty Interactive OI Dashboard")
-st.subheader(f"Data for: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%d %B %Y')}")
 
 API_KEY = os.environ.get("API_KEY", "YOUR_API_KEY") 
 WSS_URL = "wss://nimblewebstream.lisuns.com:4576/"
@@ -175,17 +200,22 @@ def run_background_tasks():
 
 def draw_dashboard():
     """Draws the entire Streamlit UI. Runs on every interaction."""
-    st.session_state.atm_strike = st.selectbox(
-        'Select Central ATM Strike',
-        options=list(STRIKE_RANGE),
-        index=list(STRIKE_RANGE).index(st.session_state.get('atm_strike', 60100))
-    )
 
-    future_price_col, atm_col, last_update_col = st.columns(3)
-    future_price_col.metric("BNF Future Price", f"{st.session_state.future_price:.2f}")
-    atm_col.metric("Selected ATM", st.session_state.atm_strike)
-    last_update_col.info(f"Last updated: {st.session_state.last_update_time}")
+    # Create a new, simpler header
+    col1, col2 = st.columns([3, 1])
 
+    with col1:
+        st.markdown(f'<div class="future-price">Banknifty future price:- {st.session_state.future_price:.2f}</div>', unsafe_allow_html=True)
+
+    with col2:
+        st.session_state.atm_strike = st.selectbox(
+            'strike selection',
+            options=list(STRIKE_RANGE),
+            index=list(STRIKE_RANGE).index(st.session_state.get('atm_strike', 60100)),
+            label_visibility="collapsed"
+        )
+
+    # The rest of the table drawing logic remains the same
     center_strike = st.session_state.atm_strike
     ce_strikes = [f"{center_strike - i*100} ce" for i in range(5, 0, -1)]
     atm_cols = [f"{center_strike} ce", f"{center_strike} pe"]
@@ -193,6 +223,7 @@ def draw_dashboard():
     
     display_columns = ce_strikes + atm_cols + pe_strikes
     
+    # Filter out columns that might not exist in the history_df yet
     valid_display_columns = [col for col in display_columns if col in st.session_state.history_df.columns]
     
     if not valid_display_columns:
@@ -202,8 +233,9 @@ def draw_dashboard():
     df_display = st.session_state.history_df[valid_display_columns]
     df_display = df_display.sort_index(ascending=False).head(20)
 
+    # Apply the existing styling function
     styled_table = style_dashboard(df_display, center_strike)
-    st.dataframe(styled_table)
+    st.dataframe(styled_table, use_container_width=True)
 
 def process_queued_data():
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
