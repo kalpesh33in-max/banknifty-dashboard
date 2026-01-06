@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import asyncio
@@ -31,9 +30,8 @@ SYMBOLS_TO_MONITOR = ALL_OPTION_SYMBOLS + [f"{EXPIRY_PREFIX}FUT"]
 
 st.set_page_config(page_title="Bank Nifty OI Scanner", layout="wide", initial_sidebar_state="collapsed")
 
-# Using the default dark theme as requested. The styling function handles cell colors.
-
-def style_dashboard(df, selected_atm):
+# Dark theme is the default. This function handles specific cell colors.
+def style_dashboard(df, atm_strike):
     def moneyness_styler(df_to_style: pd.DataFrame):
         df_style = pd.DataFrame('', index=df_to_style.index, columns=df_to_style.columns)
         for col_name in df_to_style.columns:
@@ -44,11 +42,11 @@ def style_dashboard(df, selected_atm):
                 continue
             # Black text for readability inside colored cells
             style = 'color: black; font-weight: bold;'
-            if strike == selected_atm:
+            if strike == atm_strike:
                 style += 'background-color: yellow;'
-            elif opt_type == 'ce' and strike < selected_atm:
+            elif opt_type == 'ce' and strike < atm_strike:
                 style += 'background-color: palegreen;'
-            elif opt_type == 'pe' and strike > selected_atm:
+            elif opt_type == 'pe' and strike > atm_strike:
                 style += 'background-color: lightsalmon;'
             df_style[col_name] = style
         return df_style
@@ -154,12 +152,15 @@ else:
     if live_price > 0:
         all_strikes = list(STRIKE_RANGE)
         
+        # Find 5 ITM Calls (strike < live_price)
         itm_calls = sorted([s for s in all_strikes if s < live_price])[-5:]
         itm_call_cols = [f"{s} ce" for s in itm_calls]
         
+        # Find 5 ITM Puts (strike > live_price)
         itm_puts = sorted([s for s in all_strikes if s > live_price])[:5]
         itm_put_cols = [f"{s} pe" for s in itm_puts]
         
+        # Find ATM strike (closest to live_price)
         atm_strike = min(all_strikes, key=lambda x:abs(x-live_price))
         atm_cols = [f"{atm_strike} ce", f"{atm_strike} pe"]
 
@@ -169,7 +170,6 @@ else:
         
         if valid_display_columns:
             df_display = st.session_state.history_df[valid_display_columns].sort_index(ascending=False).head(20)
-            # For coloring, we still need a selected ATM concept, let's use the calculated ATM
             styled_table = style_dashboard(df_display, atm_strike)
             st.dataframe(styled_table, use_container_width=True)
         else:
