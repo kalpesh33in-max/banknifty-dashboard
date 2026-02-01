@@ -17,9 +17,6 @@ from zoneinfo import ZoneInfo
 # --- Environment Variable Loading ---
 # Load credentials securely from environment variables
 API_KEY = os.environ.get("API_KEY")
-ULTRAMSG_INSTANCE = os.environ.get("ULTRAMSG_INSTANCE")
-ULTRAMSG_TOKEN = os.environ.get("ULTRAMSG_TOKEN")
-ULTRAMSG_GROUP_ID = os.environ.get("ULTRAMSG_GROUP_ID")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -27,9 +24,6 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # Ensure all required environment variables are set
 required_vars = {
     "API_KEY": API_KEY,
-    "ULTRAMSG_INSTANCE": ULTRAMSG_INSTANCE,
-    "ULTRAMSG_TOKEN": ULTRAMSG_TOKEN,
-    "ULTRAMSG_GROUP_ID": ULTRAMSG_GROUP_ID,
     "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
     "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
 }
@@ -44,48 +38,40 @@ if missing_vars:
 # --- API and Connection ---
 WSS_URL = "wss://nimblewebstream.lisuns.com:4576/"
 
-# --- WhatsApp Alerting (UltraMSG) ---
-ULTRAMSG_API_URL = f"https://api.ultramsg.com/{ULTRAMSG_INSTANCE}/messages/chat"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 # --- Symbol List (Options & Futures) ---
 SYMBOLS_TO_MONITOR = [
-    # BANKNIFTY Options
-    "BANKNIFTY27JAN2660000CE", "BANKNIFTY27JAN2660000PE",
-    "BANKNIFTY27JAN2659900CE", "BANKNIFTY27JAN2659900PE",
-    "BANKNIFTY27JAN2659800CE", "BANKNIFTY27JAN2659800PE",
-    "BANKNIFTY27JAN2659700CE", "BANKNIFTY27JAN2659700PE",
-    "BANKNIFTY27JAN2659600CE", "BANKNIFTY27JAN2659600PE",
-    "BANKNIFTY27JAN2659500CE", "BANKNIFTY27JAN2659500PE",
-    "BANKNIFTY27JAN2660100CE", "BANKNIFTY27JAN2660100PE",
-    "BANKNIFTY27JAN2660200CE", "BANKNIFTY27JAN2660200PE",
-    "BANKNIFTY27JAN2660300CE", "BANKNIFTY27JAN2660300PE",
-    "BANKNIFTY27JAN2660400CE", "BANKNIFTY27JAN2660400PE",
-    "BANKNIFTY27JAN2660500CE", "BANKNIFTY27JAN2660500PE",
-
-    # HDFCBANK Options
-    "HDFCBANK27JAN26980CE", "HDFCBANK27JAN26980PE",
-    "HDFCBANK27JAN26975CE", "HDFCBANK27JAN26975PE",
-    "HDFCBANK27JAN26970CE", "HDFCBANK27JAN26970PE",
-    "HDFCBANK27JAN26985CE", "HDFCBANK27JAN26985PE",
-    "HDFCBANK27JAN26990CE", "HDFCBANK27JAN26990PE",
-
-    # ICICIBANK Options
-    "ICICIBANK27JAN261370CE", "ICICIBANK27JAN261370PE",
-    "ICICIBANK27JAN261360CE", "ICICIBANK27JAN261360PE",
-    "ICICIBANK27JAN261350CE", "ICICIBANK27JAN261350PE",
-    "ICICIBANK27JAN261380CE", "ICICIBANK27JAN261380PE",
-    "ICICIBANK27JAN261390CE", "ICICIBANK27JAN261390PE",
-
-    # SBIN Options
-    "SBIN27JAN261005CE", "SBIN27JAN261005PE",
-    "SBIN27JAN261000CE", "SBIN27JAN261000PE",
-    "SBIN27JAN26995CE", "SBIN27JAN26995PE",
-    "SBIN27JAN261010CE", "SBIN27JAN261010PE",
-    "SBIN27JAN261015CE", "SBIN27JAN261015PE",
-    
-    # Futures
-    "BANKNIFTY27JAN26FUT", "HDFCBANK27JAN26FUT", "ICICIBANK27JAN26FUT", "SBIN27JAN26FUT",
+   
+    "BANKNIFTY24FEB26FUT",
+    "HDFCBANK24FEB26FUT",
+    "ICICIBANK24FEB26FUT",
+    "SBIN24FEB26FUT",
+    "BANKNIFTY24FEB2658900CE", "BANKNIFTY24FEB2658900PE", "BANKNIFTY24FEB2658800CE", "BANKNIFTY24FEB2658800PE",
+    "BANKNIFTY24FEB2658700CE", "BANKNIFTY24FEB2658700PE", "BANKNIFTY24FEB2658600CE", "BANKNIFTY24FEB2658600PE",
+    "BANKNIFTY24FEB2658500CE", "BANKNIFTY24FEB2658500PE", "BANKNIFTY24FEB2658400CE", "BANKNIFTY24FEB2658400PE",
+    "BANKNIFTY24FEB2659000CE", "BANKNIFTY24FEB2659000PE", "BANKNIFTY24FEB2659100CE", "BANKNIFTY24FEB2659100PE",
+    "BANKNIFTY24FEB2659200CE", "BANKNIFTY24FEB2659200PE", "BANKNIFTY24FEB2659300CE", "BANKNIFTY24FEB2659300PE",
+    "BANKNIFTY24FEB2659400CE", "BANKNIFTY24FEB2659400PE",
+    "HDFCBANK24FEB26930CE", "HDFCBANK24FEB26930PE", "HDFCBANK24FEB26925CE", "HDFCBANK24FEB26925PE",
+    "HDFCBANK24FEB26920CE", "HDFCBANK24FEB26920PE", "HDFCBANK24FEB26915CE", "HDFCBANK24FEB26915PE",
+    "HDFCBANK24FEB26910CE", "HDFCBANK24FEB26910PE", "HDFCBANK24FEB26905CE", "HDFCBANK24FEB26905PE",
+    "HDFCBANK24FEB26935CE", "HDFCBANK24FEB26935PE", "HDFCBANK24FEB26940CE", "HDFCBANK24FEB26940PE",
+    "HDFCBANK24FEB26945CE", "HDFCBANK24FEB26945PE", "HDFCBANK24FEB26950CE", "HDFCBANK24FEB26950PE",
+    "HDFCBANK24FEB26955CE", "HDFCBANK24FEB26955PE",
+    "SBIN24FEB261040CE", "SBIN24FEB261040PE", "SBIN24FEB261035CE", "SBIN24FEB261035PE",
+    "SBIN24FEB261030CE", "SBIN24FEB261030PE", "SBIN24FEB261025CE", "SBIN24FEB261025PE",
+    "SBIN24FEB261020CE", "SBIN24FEB261020PE", "SBIN24FEB261015CE", "SBIN24FEB261015PE",
+    "SBIN24FEB261045CE", "SBIN24FEB261045PE", "SBIN24FEB261050CE", "SBIN24FEB261050PE",
+    "SBIN24FEB261055CE", "SBIN24FEB261055PE", "SBIN24FEB261060CE", "SBIN24FEB261060PE",
+    "SBIN24FEB261065CE", "SBIN24FEB261065PE",
+    "ICICIBANK24FEB261350CE", "ICICIBANK24FEB261350PE", "ICICIBANK24FEB261340CE", "ICICIBANK24FEB261340PE",
+    "ICICIBANK24FEB261330CE", "ICICIBANK24FEB261330PE", "ICICIBANK24FEB261320CE", "ICICIBANK24FEB261320PE",
+    "ICICIBANK24FEB261310CE", "ICICIBANK24FEB261310PE", "ICICIBANK24FEB261300CE", "ICICIBANK24FEB261300PE",
+    "ICICIBANK24FEB261360CE", "ICICIBANK24FEB261360PE", "ICICIBANK24FEB261370CE", "ICICIBANK24FEB261370PE",
+    "ICICIBANK24FEB261380CE", "ICICIBANK24FEB261380PE",
+    "ICICIBANK24FEB261390CE", "ICICIBANK24FEB261390PE", "ICICIBANK24FEB261400CE", "ICICIBANK24FEB261400PE",
+    "ICICIBANK24FEB261410CE", "ICICIBANK24FEB261410PE", "ICICIBANK24FEB261420CE", "ICICIBANK24FEB261420PE",
 ]
 
 # --- Logic & Thresholds ---
@@ -121,28 +107,6 @@ future_prices = {
 def now():
     return datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
 
-async def send_whatsapp(msg: str):
-    """Sends a message to the configured UltraMSG group without blocking the event loop."""
-    print(f"📦 [{now()}] Preparing to send WhatsApp message...", flush=True)
-    loop = asyncio.get_running_loop()
-    
-    params = {'token': ULTRAMSG_TOKEN, 'to': ULTRAMSG_GROUP_ID, 'body': msg, 'priority': 10}
-    
-    # Use functools.partial to prepare the blocking function with its arguments
-    blocking_call = functools.partial(requests.post, ULTRAMSG_API_URL, params=params, timeout=10)
-
-    try:
-        # Run the blocking call in a separate thread
-        response = await loop.run_in_executor(None, blocking_call)
-        response.raise_for_status() 
-        print(f"✅ [{now()}] WhatsApp message sent successfully. Response: {response.text}", flush=True)
-    except requests.exceptions.RequestException as e:
-        print(f"❌ [{now()}] FAILED to send WhatsApp message: {e}", flush=True)
-    except Exception as e:
-        print(f"❌ [{now()}] An unexpected error occurred while sending WhatsApp message: {e}", flush=True)
-
-
-
 async def send_telegram(msg: str):
     """Sends a message to the configured Telegram chat without blocking the event loop."""
     print(f"📦 [{now()}] Preparing to send Telegram message...", flush=True)
@@ -164,11 +128,8 @@ async def send_telegram(msg: str):
         print(f"❌ [{now()}] An unexpected error occurred while sending Telegram message: {e}", flush=True)
 
 async def send_alert(msg: str):
-    """Dispatches the alert to all configured channels concurrently."""
-    await asyncio.gather(
-        send_whatsapp(msg),
-        send_telegram(msg)
-    )
+    """Dispatches the alert to the configured Telegram channel."""
+    await send_telegram(msg)
 
 # ==============================================================================
 # =============================== CORE LOGIC ===================================
@@ -196,19 +157,19 @@ def lot_bucket(lots):
 def classify_option(oi_change, price_change, symbol):
     if price_change == 0:
         if oi_change > 0:
-            return "WRITING / HEDGING"
+            return "HEDGING"
         elif oi_change < 0:
-            return "POSITION UNWINDING / PROFIT BOOKING"
+            return "REMOVE FROM HEDGE"
     elif oi_change > 0:
         if price_change > 0:
-            return "BUYERS DOMINANT (LONG BUILD-UP)"
+            return "BUYER(LONG)"
         else:  # price_change < 0
-            return "WRITERS DOMINANT (SHORT / PUT WRITING)"
+            return "WRITER(SHORT)"
     elif oi_change < 0:
         if price_change > 0:
-            return "SHORT COVERING"
+            return "REMOVE FROM SHORT"
         else:  # price_change < 0
-            return "LONG UNWINDING"
+            return "REMOVE FROM LONG"
     
     return "Indecisive Movement"
 
@@ -228,7 +189,7 @@ def get_option_moneyness(symbol, future_prices):
     elif "SBIN" in symbol: underlying = "SBIN"
     elif "BANKNIFTY" in symbol: underlying = "BANKNIFTY"
 
-    if not underlying:
+    if not underlying: 
         return "N/A" # If it's not one of our known underlyings, don't block it
 
     future_price = future_prices.get(underlying)
@@ -245,7 +206,7 @@ def get_option_moneyness(symbol, future_prices):
         return "N/A" # If we can't parse the option, don't block it
 
     # Define ATM band (0.5% of future price)
-    atm_band = future_price * 0.005
+    atm_band = future_price * 0.001
     
     # Check ATM first
     if abs(future_price - strike_price) <= atm_band:
@@ -265,7 +226,7 @@ def get_option_moneyness(symbol, future_prices):
         print(f"ℹ️ [{now()}] {symbol}: OTM (Future: {future_price:.2f}, Strike: {strike_price}), alert suppressed.", flush=True)
         return "OTM"
 
-def format_alert_message(symbol, action, bucket, lots, state, oi_chg, oi_roc, moneyness):
+def format_alert_message(symbol, action, bucket, lots, state, oi_chg, oi_roc, moneyness, future_prices):
     """Formats the alert message, showing N/A for missing IV."""
     price_chg = state['price'] - state['price_prev']
     if price_chg > 0:
@@ -325,18 +286,25 @@ TIME: {now()}
 """
         return f"{main_message}\n\n{added_section}"
     else:
-        line1 = f"{product_name} | OPTIONSTRIKE: {strike_display}{option_type_display} {moneyness}"
-        line2 = f"ACTION: {action}"
-        line3 = f"SIZE: {bucket} ({lots} lots)"
-        line4 = f"EXISTING OI: {state['oi_prev']}"
-        line5 = f"OI Δ: {oi_chg}"
-        line6 = f"OI RoC: {oi_roc:.2f}%"
-        line7 = f"PRICE: {price_dir}"
-        line8 = f"TIME: {now()}"
-        line9 = f"{year} {product_name} {strike_display}{option_type_display}"
-        line10 = f"LAST PRICE: {state['price']:.2f}"
+        # Ensure correct underlying key for future_prices lookup
+        underlying_lookup_key = product_name
+        if product_name == "ICICI":
+            underlying_lookup_key = "ICICIBANK"
+        future_price = future_prices.get(underlying_lookup_key, 0)
+        line1 = f"{product_name} | OPTION"
+        line2 = f"STRIKE: {strike_display}{option_type_display} {moneyness}"
+        line3 = f"ACTION: {action}"
+        line4 = f"SIZE: {bucket} ({lots} lots)"
+        line5 = f"EXISTING OI: {state['oi_prev']}"
+        line6 = f"OI Δ: {oi_chg}"
+        line7 = f"OI RoC: {oi_roc:.2f}%"
+        line8 = f"PRICE: {price_dir}"
+        line9 = f"TIME: {now()}"
+        line10 = f"{year} {product_name} {strike_display}{option_type_display}"
+        line11 = f"FUTURE PRICE: {future_price:.2f}"
+        line12 = f"LAST PRICE: {state['price']:.2f}"
 
-        return f"{line1}\n{line2}\n{line3}\n{line4}\n{line5}\n{line6}\n{line7}\n{line8}\n{line9}\n{line10}"
+        return f"{line1}\n{line2}\n{line3}\n{line4}\n{line5}\n{line6}\n{line7}\n{line8}\n{line9}\n{line10}\n{line11}\n{line12}"
 
 # ==============================================================================
 # ============================ MAIN SCANNER & WEBSOCKET ========================
@@ -400,19 +368,28 @@ async def process_data(data):
         print(f"🚨 [{now()}] {symbol}: OI RoC {oi_roc:.2f}% > {OI_ROC_THRESHOLD}%. Potential Alert.", flush=True)
         
         lots = lots_from_oi_change(symbol, oi_chg)
-        if lots > 50:
-            bucket = lot_bucket(lots)
-            
-            if bucket != "IGNORE":
-                #
-                # <<< NEW: Filter for ITM/ATM options before sending alert >>>
-                #
+        is_future = "FUT" in symbol
+        
+        # <<< NEW: Differentiated alert logic for Futures vs Options >>>
+        alert_condition_met = False
+        moneyness = "N/A" # Default for futures
+
+        if is_future:
+            if lots > 50:
+                alert_condition_met = True
+        else: # It's an option
+            if lots > 100:
                 moneyness = get_option_moneyness(symbol, future_prices)
                 if moneyness in ["ITM", "ATM"]:
-                    print(f"📊 [{now()}] {symbol}: {moneyness}, lots: {lots}, Bucket: {bucket}. TRIGGERING ALERT.", flush=True)
-                    action = classify_option(oi_chg, price_chg, symbol)
-                    alert_msg = format_alert_message(symbol, action, bucket, lots, state, oi_chg, oi_roc, moneyness)
-                    await send_alert(alert_msg)
+                    alert_condition_met = True
+        
+        if alert_condition_met:
+            bucket = lot_bucket(lots)
+            if bucket != "IGNORE":
+                print(f"📊 [{now()}] {symbol}: {'Future' if is_future else moneyness}, lots: {lots}, Bucket: {bucket}. TRIGGERING ALERT.", flush=True)
+                action = classify_option(oi_chg, price_chg, symbol)
+                alert_msg = format_alert_message(symbol, action, bucket, lots, state, oi_chg, oi_roc, moneyness, future_prices)
+                await send_alert(alert_msg)
 
 async def run_scanner():
     """The main function to connect, authenticate, subscribe, and process data."""
