@@ -1,64 +1,52 @@
-import yfinance as yf
+import os
 import requests
 import time
-import os
 from datetime import datetime
 
-# Railway Environment Variables
+# Use nsepython to get real-time NSE data
+# Install via: pip install nsepython
+from nsepython import nse_get_fno_lot_size, nse_events, nse_get_index_quote
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def send_telegram_msg(message):
+def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+
+def get_hidden_news():
     try:
-        requests.post(url, json=payload)
+        # 1. Fetch live Corporate Announcements from NSE
+        # This gives you "Board Meetings", "Results", "Mergers" before the media reports them.
+        events = nse_events()
+        # We only take the top 3 most recent announcements
+        top_news = events.head(3)
+        
+        news_report = "🚨 *LIVE NSE CORPORATE FILINGS* 🚨\n\n"
+        for index, row in top_news.iterrows():
+            news_report += f"🔹 *{row['company']}*: {row['desc']}\n"
+            news_report += f"⏰ {row['date']}\n\n"
+        
+        # 2. Market Sentiment (Nifty & BankNifty)
+        nifty = nse_get_index_quote("NIFTY 50")
+        bnifty = nse_get_index_quote("NIFTY BANK")
+        
+        report = f"📊 *Live Indices Status*\n"
+        report += f"📍 Nifty: {nifty['lastPrice']} ({nifty['pChange']}%)\n"
+        report += f"📍 BankNifty: {bnifty['lastPrice']} ({bnifty['pChange']}%)\n\n"
+        
+        return report + news_report
     except Exception as e:
-        print(f"Error sending telegram: {e}")
+        return f"⚠️ Scanner Error: {str(e)}"
 
-def get_market_pulse():
-    # Global 'Hidden' Drivers: Dollar Index, 10Y Yield, VIX (Fear Index)
-    indicators = {
-        "DXY (USD Index)": "DX-Y.NYB", 
-        "US 10Y Yield": "^TNX",
-        "India VIX": "^INDIAVIX"
-    }
-    
-    report = f"📅 *Market Intel: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"
-    report += "*🌍 Global Macro State:*\n"
-    
-    for name, ticker in indicators.items():
-        ticker_data = yf.Ticker(ticker)
-        data = ticker_data.history(period="2d")
-        
-        if len(data) >= 2:
-            prev_close = data['Close'].iloc[-2]
-            current_price = data['Close'].iloc[-1]
-            change = ((current_price - prev_close) / prev_close) * 100
-            
-            # Logic for "Impact"
-            sentiment = "⚠️" if (name == "DXY (USD Index)" and change > 0.2) else "✅"
-            if name == "India VIX" and change > 5: sentiment = "🔥 Volatility Spike"
-            
-            report += f"{sentiment} {name}: {current_price:.2f} ({change:+.2f}%)\n"
-            
-    report += "\n*🇮🇳 Indian 'Hidden' Movers:*\n"
-    report += "• Check NSE: Bulk Deals & Insider Trades\n"
-    report += "• Focus: FII/DII Net Flow (Daily Data)\n"
-    
-    return report
-
-def monitor_loop():
-    # Initial alert to confirm it's running
-    send_telegram_msg("🛰️ **Market Intelligence System Online**\nScript: `news.py` is active.")
-    
+def start_monitor():
+    send_telegram("🚀 **Professional News Scanner Started**\nMonitoring NSE Filings...")
     while True:
-        # Runs every 4 hours (14400 seconds)
-        # You can adjust this for market opening hours (9:15 AM IST)
-        report = get_market_pulse()
-        send_telegram_msg(report)
-        
-        time.sleep(14400) 
+        # Check for news every 5 minutes during market hours
+        # This helps you get 'hidden' moves before the retail crowd
+        update = get_hidden_news()
+        send_telegram(update)
+        time.sleep(300) 
 
 if __name__ == "__main__":
-    monitor_loop()
+    start_monitor()
