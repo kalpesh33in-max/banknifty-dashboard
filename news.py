@@ -1,63 +1,84 @@
-import os, requests, time, yfinance as yf, feedparser
+import os
+import time
+import requests
+import feedparser
+import yfinance as yf
 from datetime import datetime
 from nsepython import nse_optionchain_scrapper, nse_events, nse_get_index_quote
 
+# --- Configuration ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
-# List of 10 Stocks you want to track PCR for
-WATCHLIST = ['RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'TCS', 'SBIN', 'BHARTIARTL', 'AXISBANK', 'WIT', 'LT']
-
-def get_pcr(symbol, is_index=False):
-    try:
-        # Fetching Option Chain
-        payload = nse_optionchain_scrapper(symbol)
-        
-        # PCR Formula = Total Put OI / Total Call OI
-        total_put_oi = payload['filtered']['CE']['totOI'] # nsepython returns total for filtered
-        total_call_oi = payload['filtered']['PE']['totOI']
-        
-        pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
-        return round(pcr, 2)
-    except:
-        return "N/A"
-
-def get_combined_report():
-    report = f"🚀 **Market Intel + PCR Scanner** ({datetime.now().strftime('%H:%M')})\n"
-    report += "---"
-
-    # 1. INDEX PCR (Nifty & Bank Nifty)
-    report += "\n📊 **Index Sentiment (PCR):**\n"
-    for idx in ["NIFTY", "BANKNIFTY"]:
-        pcr_val = get_pcr(idx, True)
-        sentiment = "🟢 Bullish" if float(pcr_val) < 0.7 else "🔴 Bearish" if float(pcr_val) > 1.2 else "🟡 Neutral"
-        report += f"• {idx}: {pcr_val} ({sentiment})\n"
-
-    # 2. STOCK WATCHLIST PCR (Top 10)
-    report += "\n🎯 **Stock Watchlist PCR:**\n"
-    # To save time/avoid rate limits, we can scan top 5-10
-    for stock in WATCHLIST[:10]:
-        val = get_pcr(stock)
-        report += f"`{stock.ljust(10)}`: {val} | "
-    
-    # 3. GLOBAL & NEWS (From previous version)
-    report += "\n\n📰 **Top Headlines:**\n"
-    feed = feedparser.parse("https://www.moneycontrol.com/rss/latestnews.xml")
-    for entry in feed.entries[:2]:
-        report += f"• {entry.title}\n"
-
-    return report
+# PCR Watchlist: Indices + Top 10 Stocks
+PCR_WATCHLIST = ['NIFTY', 'BANKNIFTY', 'RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'TCS', 'SBIN', 'BHARTIARTL', 'AXISBANK', 'WIPRO', 'LT']
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    try:
+        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    except Exception as e:
+        print(f"Telegram Error: {e}")
+
+def get_pcr(symbol):
+    """Calculates PCR safely. Returns 'N/A' on failure."""
+    try:
+        data = nse_optionchain_scrapper(symbol)
+        # PCR = Total Put OI / Total Call OI
+        put_oi = data['filtered']['PE']['totOI']
+        call_oi = data['filtered']['CE']['totOI']
+        if call_oi > 0:
+            return round(put_oi / call_oi, 2)
+        return 0.0
+    except:
+        return "N/A"
+
+def get_market_report():
+    report = f"📊 **MARKET INTEL & PCR SCANNER**\n_Time: {datetime.now().strftime('%d %b %Y | %H:%M')}_\n"
+    report += "---"
+
+    # 1. Global Sentiment (yfinance)
+    try:
+        report += "\n🌍 *Global Drivers:*"
+        # DXY: Dollar Index (Up=Bad), TNX: US 10Y Yield (Up=Bad)
+        for name, ticker in {"USD Index": "DX-Y.NYB", "US 10Y Yield": "^TNX"}.items():
+            price = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
+            report += f"\n• {name}: {price:.2f}"
+    except: report += "\n⚠️ Global data sync failed."
+
+    # 2. Indian Index & Stock PCR
+    report += "\n\n📈 *Sentiment (PCR):*\n"
+    for item in PCR_WATCHLIST:
+        val = get_pcr(item)
+        if val != "N/A":
+            # Trading logic: <0.7 is Bullish, >1.2 is Bearish (Contrarian)
+            sentiment = "🟢" if val < 0.8 else "🔴" if val > 1.2 else "🟡"
+            report += f"{sentiment} `{item.ljust(10)}`: {val}\n"
+        else:
+            report += f"⚪ `{item.ljust(10)}`: Market Closed\n"
+
+    # 3. Hidden News (NSE Filings + Moneycontrol)
+    try:
+        report += "\n🚨 *NSE Corporate Filings:*\n"
+        announcements = nse_events().head(2)
+        for _, row in announcements.iterrows():
+            report += f"🔹 {row['company']}: {row['desc'][:50]}...\n"
+            
+        report += "\n📰 *Fast News Headlines:*\n"
+        feed = feedparser.parse("https://www.moneycontrol.com/rss/latestnews.xml")
+        for entry in feed.entries[:3]:
+            report += f"• {entry.title}\n"
+    except: report += "\n⚠️ News sync failed."
+
+    return report
 
 if __name__ == "__main__":
-    send_telegram("✅ **PCR & News Bot Active**\nIndices + 10 Stocks tracking every 5m.")
+    send_telegram("🛰️ **Scanner news.py Initialized**\nMonitoring Global Macro, PCR, and News every 5 mins.")
     while True:
         try:
-            msg = get_combined_report()
-            send_telegram(msg)
+            full_msg = get_market_report()
+            send_telegram(full_msg)
         except Exception as e:
-            print(f"Error: {e}")
-        time.sleep(300) # 5 Minutes
+            print(f"Main Loop Error: {e}")
+        
+        # Runs every 5 minutes as requested
+        time.sleep(300)
