@@ -1,54 +1,51 @@
-import os
-import requests
-import time
-import yfinance as yf
+import os, requests, time, yfinance as yf, feedparser
 from datetime import datetime
-from nsepython import nse_events, nse_get_index_quote
-
-# NEW: Library for reading news feeds quickly
-import feedparser 
+from nsepython import nse_optionchain_scrapper, nse_events, nse_get_index_quote
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def get_pro_news():
-    news_report = "\n📰 *Pro News (Moneycontrol/BQ):*\n"
-    # Moneycontrol RSS Feed for Top News
-    feed_url = "https://www.moneycontrol.com/rss/latestnews.xml"
-    feed = feedparser.parse(feed_url)
-    
-    # Get top 3 headlines
-    for entry in feed.entries[:3]:
-        news_report += f"• {entry.title}\n"
-    return news_report
+# List of 10 Stocks you want to track PCR for
+WATCHLIST = ['RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'TCS', 'SBIN', 'BHARTIARTL', 'AXISBANK', 'WIT', 'LT']
 
-def get_combined_intel():
-    report = f"🕒 *Market Pulse: {datetime.now().strftime('%H:%M')}*\n"
-    report += "---"
-    
-    # 1. Global Drivers
+def get_pcr(symbol, is_index=False):
     try:
-        global_tickers = {"USD Index": "DX-Y.NYB", "US 10Y Yield": "^TNX"}
-        report += "\n🌍 *Global:* "
-        for name, sym in global_tickers.items():
-            price = yf.Ticker(sym).history(period="1d")['Close'].iloc[-1]
-            report += f"{name}: {price:.2f} | "
-    except: pass
-
-    # 2. Indian Indices & Hidden NSE Filings
-    try:
-        nifty = nse_get_index_quote("NIFTY 50")
-        report += f"\n\n🇮🇳 *Nifty:* {nifty['lastPrice']} ({nifty['pChange']}%)\n"
+        # Fetching Option Chain
+        payload = nse_optionchain_scrapper(symbol)
         
-        events = nse_events()
-        report += "\n🚨 *NSE Filings:* "
-        for _, row in events.head(2).iterrows():
-            report += f"\n- {row['company']}: {row['desc'][:50]}..."
-    except: pass
+        # PCR Formula = Total Put OI / Total Call OI
+        total_put_oi = payload['filtered']['CE']['totOI'] # nsepython returns total for filtered
+        total_call_oi = payload['filtered']['PE']['totOI']
+        
+        pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
+        return round(pcr, 2)
+    except:
+        return "N/A"
 
-    # 3. Aggregated Professional News
-    report += get_pro_news()
+def get_combined_report():
+    report = f"🚀 **Market Intel + PCR Scanner** ({datetime.now().strftime('%H:%M')})\n"
+    report += "---"
+
+    # 1. INDEX PCR (Nifty & Bank Nifty)
+    report += "\n📊 **Index Sentiment (PCR):**\n"
+    for idx in ["NIFTY", "BANKNIFTY"]:
+        pcr_val = get_pcr(idx, True)
+        sentiment = "🟢 Bullish" if float(pcr_val) < 0.7 else "🔴 Bearish" if float(pcr_val) > 1.2 else "🟡 Neutral"
+        report += f"• {idx}: {pcr_val} ({sentiment})\n"
+
+    # 2. STOCK WATCHLIST PCR (Top 10)
+    report += "\n🎯 **Stock Watchlist PCR:**\n"
+    # To save time/avoid rate limits, we can scan top 5-10
+    for stock in WATCHLIST[:10]:
+        val = get_pcr(stock)
+        report += f"`{stock.ljust(10)}`: {val} | "
     
+    # 3. GLOBAL & NEWS (From previous version)
+    report += "\n\n📰 **Top Headlines:**\n"
+    feed = feedparser.parse("https://www.moneycontrol.com/rss/latestnews.xml")
+    for entry in feed.entries[:2]:
+        report += f"• {entry.title}\n"
+
     return report
 
 def send_telegram(msg):
@@ -56,7 +53,11 @@ def send_telegram(msg):
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
-    send_telegram("🚀 **Advanced Hybrid Scanner Active**\nTracking NSE, YFinance, & Moneycontrol Pro feeds.")
+    send_telegram("✅ **PCR & News Bot Active**\nIndices + 10 Stocks tracking every 5m.")
     while True:
-        send_telegram(get_combined_intel())
-        time.sleep(900) # Every 15 mins
+        try:
+            msg = get_combined_report()
+            send_telegram(msg)
+        except Exception as e:
+            print(f"Error: {e}")
+        time.sleep(300) # 5 Minutes
