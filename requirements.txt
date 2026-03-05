@@ -1,5 +1,4 @@
 nsepython
-yfinance
 requests
-pandas
 feedparser
+pandas
