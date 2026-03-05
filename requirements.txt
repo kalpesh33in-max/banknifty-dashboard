@@ -1,2 +1,3 @@
-yfinance
+nsepython
 requests
+pandas
