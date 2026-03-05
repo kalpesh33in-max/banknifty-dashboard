@@ -3,61 +3,60 @@ import requests
 import time
 import yfinance as yf
 from datetime import datetime
-from nsepython import nse_get_fno_lot_sizes, nse_events, nse_get_index_quote
+from nsepython import nse_events, nse_get_index_quote
 
-# Railway Environment Variables
+# NEW: Library for reading news feeds quickly
+import feedparser 
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-    except Exception as e:
-        print(f"Telegram Error: {e}")
+def get_pro_news():
+    news_report = "\n📰 *Pro News (Moneycontrol/BQ):*\n"
+    # Moneycontrol RSS Feed for Top News
+    feed_url = "https://www.moneycontrol.com/rss/latestnews.xml"
+    feed = feedparser.parse(feed_url)
+    
+    # Get top 3 headlines
+    for entry in feed.entries[:3]:
+        news_report += f"• {entry.title}\n"
+    return news_report
 
 def get_combined_intel():
-    report = f"🕒 *Market Update: {datetime.now().strftime('%H:%M')}*\n"
+    report = f"🕒 *Market Pulse: {datetime.now().strftime('%H:%M')}*\n"
     report += "---"
     
-    # 1. GLOBAL PARAMETERS (yfinance) - The 'Hidden' Market Drivers
+    # 1. Global Drivers
     try:
-        # DXY: Dollar Index (Up = Bad for Nifty), BZ=F: Brent Crude (Up = Bad for India)
-        global_tickers = {"USD Index": "DX-Y.NYB", "Brent Crude": "BZ=F", "US 10Y Yield": "^TNX"}
-        report += "\n🌍 *Global Triggers:*\n"
+        global_tickers = {"USD Index": "DX-Y.NYB", "US 10Y Yield": "^TNX"}
+        report += "\n🌍 *Global:* "
         for name, sym in global_tickers.items():
-            t = yf.Ticker(sym).history(period="1d")
-            if not t.empty:
-                price = t['Close'].iloc[-1]
-                report += f"• {name}: {price:.2f}\n"
-    except:
-        report += "\n⚠️ Global data sync failed."
+            price = yf.Ticker(sym).history(period="1d")['Close'].iloc[-1]
+            report += f"{name}: {price:.2f} | "
+    except: pass
 
-    # 2. INDIAN INDEX & CORPORATE NEWS (nsepython)
+    # 2. Indian Indices & Hidden NSE Filings
     try:
-        # Indices
         nifty = nse_get_index_quote("NIFTY 50")
-        report += f"\n🇮🇳 *Indian Indices:*\n"
-        report += f"📍 Nifty: {nifty.get('lastPrice', 'N/A')} ({nifty.get('pChange', '0')}%)\n"
+        report += f"\n\n🇮🇳 *Nifty:* {nifty['lastPrice']} ({nifty['pChange']}%)\n"
         
-        # 'Hidden' Corporate Announcements
         events = nse_events()
-        top_news = events.head(3)
-        report += "\n🚨 *Latest NSE Filings:*\n"
-        for _, row in top_news.iterrows():
-            report += f"🔹 *{row['company']}*: {row['desc'][:60]}...\n"
-    except Exception as e:
-        report += f"\n⚠️ NSE Data error: {str(e)}"
+        report += "\n🚨 *NSE Filings:* "
+        for _, row in events.head(2).iterrows():
+            report += f"\n- {row['company']}: {row['desc'][:50]}..."
+    except: pass
 
+    # 3. Aggregated Professional News
+    report += get_pro_news()
+    
     return report
 
-def monitor():
-    send_telegram("🛰️ **Hybrid News Scanner Online**\nTracking NSE & Global Macro...")
-    while True:
-        # Runs every 10 minutes to stay within API limits but stay 'quick'
-        msg = get_combined_intel()
-        send_telegram(msg)
-        time.sleep(600) 
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
-    monitor()
+    send_telegram("🚀 **Advanced Hybrid Scanner Active**\nTracking NSE, YFinance, & Moneycontrol Pro feeds.")
+    while True:
+        send_telegram(get_combined_intel())
+        time.sleep(900) # Every 15 mins
