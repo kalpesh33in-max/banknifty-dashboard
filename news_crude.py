@@ -1,47 +1,52 @@
 import os, time, requests, yfinance as yf
 from datetime import datetime
 
-# Railway Variables
+# Railway Config
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def get_global_market_alert():
+def get_oi_analysis():
     try:
-        # Fetch Global Crude (WTI) and Dollar Index (DXY)
-        # CL=F is the WTI Crude Oil Futures ticker
-        tickers = {"Crude Oil": "CL=F", "USD Index": "DX-Y.NYB"}
-        data = yf.download(list(tickers.values()), period="1d", interval="1m").iloc[-1]
+        # Using USO (Oil ETF) to get Strike-wise OI data
+        ticker = yf.Ticker("USO")
+        # Get the nearest expiry date
+        expiry = ticker.options[0]
+        opt_chain = ticker.option_chain(expiry)
         
-        report = f"🌎 **GLOBAL COMMODITY ALERT**\n_Time: {datetime.now().strftime('%H:%M')}_\n"
+        # We analyze Calls to find Writers and Buyers
+        calls = opt_chain.calls
+        # Filter for "Heavy Lots" (e.g., top 5 strikes by Open Interest)
+        heavy_calls = calls.nlargest(5, 'openInterest')
+        
+        report = f"🛢️ **CRUDE OIL OI ANALYSIS** ({expiry})\n"
         report += "---"
-        
-        # Crude Price & Change
-        crude_price = data['Close']['CL=F']
-        report += f"\n🛢️ **WTI Crude: ${crude_price:.2f}**"
-        
-        # DXY Price (Important for Crude Traders)
-        # If DXY goes up, Crude usually falls.
-        dxy_price = data['Close']['DX-Y.NYB']
-        report += f"\n💵 **USD Index: {dxy_price:.2f}**"
-        
-        # "Hidden" Trend Logic
-        # If Crude is up and Dollar is down, it's a strong Buy signal.
-        if crude_price > 75 and dxy_price < 104:
-            report += "\n\n🔥 **Signal: Strong Global Bullish Setup**"
-        
-        return report
 
+        for index, row in heavy_calls.iterrows():
+            strike = row['strike']
+            oi = row['openInterest']
+            change = row['change'] # Price change of the option
+            
+            # Simplified Sentiment Logic based on Price & OI relationship
+            # Note: For intraday, we compare current price move with OI
+            if change > 0:
+                sentiment = "🚀 **Long Buildup (BUY)**"
+            else:
+                sentiment = "✍️ **Short Buildup (WRITER)**"
+                
+            report += f"\n🎯 Strike: `{strike}` | OI: {oi}"
+            report += f"\n💡 Signal: {sentiment}\n"
+
+        return report
     except Exception as e:
-        # Instead of crashing, we return a friendly error to Telegram
-        return f"⚠️ Global Sync Error: Try again in 10 mins."
+        return f"⚠️ OI Data Syncing... (Market might be closed)"
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
+    send_telegram("🛰️ **OI Sentiment Scanner Active**\nMonitoring Heavy Lots & Strike Action.")
     while True:
-        report = get_global_market_alert()
-        send_telegram(report)
-        # 15 minutes is the 'Safe Zone' for Railway
-        time.sleep(900)
+        msg = get_oi_analysis()
+        send_telegram(msg)
+        time.sleep(900) # 15 minutes
