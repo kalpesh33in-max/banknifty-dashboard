@@ -1,63 +1,36 @@
-import os
-import time
-import requests
-import pandas as pd
+import os, time, requests, yfinance as yf
 from datetime import datetime
 
+# Railway Config
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def get_mcx_crude_oi():
-    # NSE provides a commodity watch that includes MCX Crude Oil
-    url = "https://www.nseindia.com/api/commodity-derivatives?index=all"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/market-data/commodity-derivatives"
-    }
-
+def get_world_crude_data():
     try:
-        session = requests.Session()
-        # Get cookies first
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        response = session.get(url, headers=headers, timeout=10)
-        data = response.json()
-
-        # Filter for Crude Oil
-        crude_data = [item for item in data['data'] if item['symbol'] == 'CRUDEOIL']
+        # Fetching WTI Crude Oil Futures (Current Contract)
+        crude = yf.Ticker("CL=F")
+        data = crude.history(period="1d")
         
-        if not crude_data:
-            return "⚠️ No Crude data found (Market might be closed)."
+        if data.empty:
+            return "⚠️ World Market is currently paused (Weekend/Holiday)."
 
-        report = f"🛢️ **MCX CRUDE OIL SCANNER**\n_{datetime.now().strftime('%H:%M')}_\n"
+        ltp = data['Close'].iloc[-1]
+        change = ltp - data['Open'].iloc[-1]
+        pct_change = (change / data['Open'].iloc[-1]) * 100
+        
+        report = f"🌎 **WORLD CRUDE OIL (WTI)**\n"
+        report += f"🕒 Time: {datetime.now().strftime('%H:%M')} IST\n"
         report += "---"
-
-        total_ce_oi = 0
-        total_pe_oi = 0
+        report += f"\n💰 **Price: ${ltp:.2f}**"
+        report += f"\n📈 Change: {'+' if change > 0 else ''}{change:.2f} ({pct_change:.2f}%)"
         
-        # Sort by Open Interest to find 'Hidden' big writers
-        report += "\n🎯 **Top OI Strikes (The Writers):**\n"
-        for contract in crude_data[:8]: # Top 8 active strikes
-            strike = contract['strikePrice']
-            opt_type = contract['optionType']
-            oi = contract['openInterest']
-            ltp = contract['lastPrice']
-            
-            if opt_type == 'Call': total_ce_oi += oi
-            else: total_pe_oi += oi
-            
-            report += f"• `{strike} {opt_type[0]}`: OI {oi} | ₹{ltp}\n"
-
-        # Sentiment Logic
-        pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0
-        sentiment = "🟢 Bullish (Put Writing)" if pcr > 1.1 else "🔴 Bearish (Call Writing)" if pcr < 0.8 else "🟡 Neutral"
+        # Adding Global Sentiment
+        sentiment = "🚀 Bullish" if pct_change > 0.5 else "📉 Bearish" if pct_change < -0.5 else "⚖️ Side-ways"
+        report += f"\n\n📊 **Global Sentiment:** {sentiment}"
         
-        report += f"\n📊 **Sentiment:** {sentiment}\n📈 **PCR:** {pcr}"
         return report
-
     except Exception as e:
-        return f"❌ Blocked by NSE/MCX: {str(e)}"
+        return f"❌ Global Data Error: {str(e)}"
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -65,6 +38,7 @@ def send_telegram(msg):
 
 if __name__ == "__main__":
     while True:
-        report = get_mcx_crude_oi()
-        send_telegram(report)
-        time.sleep(600) # 10 Minutes to avoid IP Ban
+        msg = get_world_crude_data()
+        send_telegram(msg)
+        # 10 minute alerts
+        time.sleep(600)
