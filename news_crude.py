@@ -1,36 +1,39 @@
 import os, time, requests, yfinance as yf
 from datetime import datetime
 
-# Railway Config
+# Railway Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-def get_world_crude_data():
+def get_global_market_alert():
     try:
-        # Fetching WTI Crude Oil Futures (Current Contract)
-        crude = yf.Ticker("CL=F")
-        data = crude.history(period="1d")
+        # Fetch Global Crude (WTI) and Dollar Index (DXY)
+        # CL=F is the WTI Crude Oil Futures ticker
+        tickers = {"Crude Oil": "CL=F", "USD Index": "DX-Y.NYB"}
+        data = yf.download(list(tickers.values()), period="1d", interval="1m").iloc[-1]
         
-        if data.empty:
-            return "⚠️ World Market is currently paused (Weekend/Holiday)."
-
-        ltp = data['Close'].iloc[-1]
-        change = ltp - data['Open'].iloc[-1]
-        pct_change = (change / data['Open'].iloc[-1]) * 100
-        
-        report = f"🌎 **WORLD CRUDE OIL (WTI)**\n"
-        report += f"🕒 Time: {datetime.now().strftime('%H:%M')} IST\n"
+        report = f"🌎 **GLOBAL COMMODITY ALERT**\n_Time: {datetime.now().strftime('%H:%M')}_\n"
         report += "---"
-        report += f"\n💰 **Price: ${ltp:.2f}**"
-        report += f"\n📈 Change: {'+' if change > 0 else ''}{change:.2f} ({pct_change:.2f}%)"
         
-        # Adding Global Sentiment
-        sentiment = "🚀 Bullish" if pct_change > 0.5 else "📉 Bearish" if pct_change < -0.5 else "⚖️ Side-ways"
-        report += f"\n\n📊 **Global Sentiment:** {sentiment}"
+        # Crude Price & Change
+        crude_price = data['Close']['CL=F']
+        report += f"\n🛢️ **WTI Crude: ${crude_price:.2f}**"
+        
+        # DXY Price (Important for Crude Traders)
+        # If DXY goes up, Crude usually falls.
+        dxy_price = data['Close']['DX-Y.NYB']
+        report += f"\n💵 **USD Index: {dxy_price:.2f}**"
+        
+        # "Hidden" Trend Logic
+        # If Crude is up and Dollar is down, it's a strong Buy signal.
+        if crude_price > 75 and dxy_price < 104:
+            report += "\n\n🔥 **Signal: Strong Global Bullish Setup**"
         
         return report
+
     except Exception as e:
-        return f"❌ Global Data Error: {str(e)}"
+        # Instead of crashing, we return a friendly error to Telegram
+        return f"⚠️ Global Sync Error: Try again in 10 mins."
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -38,7 +41,7 @@ def send_telegram(msg):
 
 if __name__ == "__main__":
     while True:
-        msg = get_world_crude_data()
-        send_telegram(msg)
-        # 10 minute alerts
-        time.sleep(600)
+        report = get_global_market_alert()
+        send_telegram(report)
+        # 15 minutes is the 'Safe Zone' for Railway
+        time.sleep(900)
