@@ -1,1 +1,1 @@
-worker: python news_crude.py
+worker: python news.py
