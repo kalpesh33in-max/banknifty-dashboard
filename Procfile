@@ -1,1 +1,1 @@
-worker: python news.py
+worker: python scanner_bot.py
