@@ -1,60 +1,68 @@
-import re
 import os
+import re
+import asyncio
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 
 # --- CONFIGURATION FROM RAILWAY VARIABLES ---
-API_ID = int(os.environ.get('TG_API_ID'))
-API_HASH = os.environ.get('TG_API_HASH')
-SESSION_STR = os.environ.get('TG_SESSION_STR') # String session for cloud deployment
-
-# Bot Usernames from your screenshots
-SOURCE_BOT = 'angelk101239_bot' 
+API_ID = int(os.getenv('TG_API_ID'))
+API_HASH = os.getenv('TG_API_HASH')
+SESSION_STR = os.getenv('TG_SESSION_STR')
+SOURCE_BOT = 'angelk101239_bot'
 TARGET_BOT = 'Marketmenia_news'
 
 def get_atm_strike(price):
+    """Rounds Future Price to nearest 100 for BankNifty ATM."""
     return round(float(price) / 100) * 100
 
 async def main():
-    # Use StringSession for Railway to avoid losing login on every deploy
-    from telethon.sessions import StringSession
+    # Connect using the StringSession you just generated
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
-    
-    print(f"Connected. Monitoring {SOURCE_BOT}...")
+    print("Successfully connected! Monitoring Flow Reports...")
 
     @client.on(events.NewMessage(chats=SOURCE_BOT))
     async def handler(event):
         text = event.message.text
         
-        # 1. Quick Future Price & ATM Extraction
+        # 1. Extract Future Price
         price_match = re.search(r"BANKNIFTY \(FUT\) : ([\d.]+)", text)
         if not price_match: return
         
         fut_price = float(price_match.group(1))
         atm = get_atm_strike(fut_price)
 
-        # 2. Strict Criteria Extraction (as per your sheet)
-        b_turn = float(re.search(r"Bearish Turn : ([\d.]+)Cr", text).group(1)) if "Bearish Turn" in text else 0
-        bul_turn = float(re.search(r"Bullish Turn : ([\d.]+)Cr", text).group(1)) if "Bullish Turn" in text else 0
-        fut_sell = float(re.search(r"FUTURE_SELL.*?([\d.]+)Cr", text).group(1)) if "FUTURE_SELL" in text else 0
-        fut_buy = float(re.search(r"FUTURE_BUY.*?([\d.]+)Cr", text).group(1)) if "FUTURE_BUY" in text else 0
+        # 2. Extract Values for Logic (with safe fallbacks)
+        def get_val(pattern, content):
+            match = re.search(pattern, content)
+            return float(match.group(1)) if match else 0.0
+
+        b_turn = get_val(r"Bearish Turn : ([\d.]+)Cr", text)
+        bul_turn = get_val(r"Bullish Turn : ([\d.]+)Cr", text)
+        fut_sell = get_val(r"FUTURE_SELL.*?([\d.]+)Cr", text)
+        fut_buy = get_val(r"FUTURE_BUY.*?([\d.]+)Cr", text)
         
         # ITM Logic
-        call_w = float(re.search(r"CALL_WRITE.*?([\d.]+)Cr", text).group(1)) if "CALL_WRITE" in text else 0
-        put_sc = float(re.search(r"PUT_SC.*?([\d.]+)Cr", text).group(1)) if "PUT_SC" in text else 0
-        put_w = float(re.search(r"PUT_WRITE.*?([\d.]+)Cr", text).group(1)) if "PUT_WRITE" in text else 0
-        call_sc = float(re.search(r"CALL_SC.*?([\d.]+)Cr", text).group(1)) if "CALL_SC" in text else 0
+        cw_itm = get_val(r"CALL_WRITE.*?([\d.]+)Cr", text)
+        p_sc_itm = get_val(r"PUT_SC.*?([\d.]+)Cr", text)
+        pw_itm = get_val(r"PUT_WRITE.*?([\d.]+)Cr", text)
+        c_sc_itm = get_val(r"CALL_SC.*?([\d.]+)Cr", text)
 
-        # --- BEARISH SIGNAL ---
-        if ("VERY STRONG BEARISH" in text.upper() and b_turn > 10 and bul_turn < 1 and fut_sell > 3 and (call_w > 2 or put_sc > 2)):
-            await client.send_message(TARGET_BOT, f"🔴 BUY BANKNIFTY {atm} PE | SL: 20 | TGT: 40")
+        # --- BEARISH CRITERIA ---
+        if ("VERY STRONG BEARISH" in text.upper() and b_turn > 10.0 and bul_turn < 1.0 and fut_sell > 3.0):
+            if cw_itm > 2.0 or p_sc_itm > 2.0:
+                msg = f"🔴 **SIGNAL: BUY BANKNIFTY {atm} PE**\nSL: 20 pts | TGT: 40 pts"
+                await client.send_message(TARGET_BOT, msg)
+                print(f"Sent Bearish Signal for {atm} PE")
 
-        # --- BULLISH SIGNAL ---
-        elif ("VERY STRONG BULLISH" in text.upper() and bul_turn > 10 and b_turn < 1 and fut_buy > 3 and (put_w > 2 or call_sc > 2)):
-            await client.send_message(TARGET_BOT, f"🟢 BUY BANKNIFTY {atm} CE | SL: 20 | TGT: 40")
+        # --- BULLISH CRITERIA ---
+        elif ("VERY STRONG BULLISH" in text.upper() and bul_turn > 10.0 and b_turn < 1.0 and fut_buy > 3.0):
+            if pw_itm > 2.0 or c_sc_itm > 2.0:
+                msg = f"🟢 **SIGNAL: BUY BANKNIFTY {atm} CE**\nSL: 20 pts | TGT: 40 pts"
+                await client.send_message(TARGET_BOT, msg)
+                print(f"Sent Bullish Signal for {atm} CE")
 
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
