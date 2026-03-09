@@ -17,7 +17,6 @@ TARGET_BOT_ID = int(os.getenv("TARGET_BOT"))
 
 IST = pytz.timezone("Asia/Kolkata")
 
-
 # ---------------- FUNCTIONS ---------------- #
 
 def get_atm(price):
@@ -25,11 +24,7 @@ def get_atm(price):
 
 
 def get_value(label, text):
-    """
-    Extract value in Cr or L and convert to Crore
-    """
     match = re.search(rf"{label}.*?([\d.]+)(Cr|L)", text)
-
     if not match:
         return 0.0
 
@@ -43,42 +38,10 @@ def get_value(label, text):
 
 
 def get_future_price(text):
-
     match = re.search(r"BANKNIFTY \(FUT:\s*([\d.]+)\)", text)
-
     if match:
         return float(match.group(1))
-
     return None
-
-
-# ---------------- MARKET ALERT ---------------- #
-
-async def market_alerts(client):
-
-    while True:
-
-        now = datetime.datetime.now(IST)
-
-        if now.weekday() <= 4:
-
-            t = now.strftime("%H:%M")
-
-            if t == "09:15":
-                await client.send_message(
-                    TARGET_BOT_ID,
-                    "🚀 MARKET OPEN\nInstitutional Flow Scanner Active"
-                )
-                await asyncio.sleep(60)
-
-            elif t == "15:30":
-                await client.send_message(
-                    TARGET_BOT_ID,
-                    "🏁 MARKET CLOSED\nScanner Stopped"
-                )
-                await asyncio.sleep(60)
-
-        await asyncio.sleep(20)
 
 
 # ---------------- MAIN ---------------- #
@@ -91,8 +54,6 @@ async def main():
     await client.get_dialogs()
 
     print("Bridge Active : Monitoring Sources")
-
-    asyncio.create_task(market_alerts(client))
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
@@ -109,10 +70,7 @@ async def main():
 
         atm = get_atm(fut_price)
 
-        # -------- OPTION VALUES -------- #
-
-        call_buy = get_value("CALL_BUY", text)
-        put_buy = get_value("PUT_BUY", text)
+        # OPTION DATA
 
         call_write = get_value("CALL_WRITE", text)
         put_write = get_value("PUT_WRITE", text)
@@ -120,37 +78,26 @@ async def main():
         call_sc = get_value("CALL_SC", text)
         put_sc = get_value("PUT_SC", text)
 
-        # -------- FUTURES -------- #
-
-        fut_buy = get_value("FUTURE_BUY", text)
-        fut_sell = get_value("FUTURE_SELL", text)
-
-        # -------- TURNS -------- #
-
         bullish_turn = get_value("Bullish Turn", text)
         bearish_turn = get_value("Bearish Turn", text)
 
-        # -------- SOURCE -------- #
+        # SOURCE
 
         if event.chat_id == SOURCE_IDS[0]:
-
             source = "2 MIN FLOW"
             target = 40
-
         else:
-
             source = "5 MIN FLOW"
             target = 60
 
         # ==============================
-        # 🟢 CALL BUY SIGNAL
+        # 🟢 CALL BUY
         # ==============================
 
         if (
-            call_buy > 2 and
-            (put_write > 2 or call_sc > 2) and
             bullish_turn > 10 and
-            bearish_turn < 1
+            bearish_turn < 1 and
+            (put_write > 2 or call_sc > 2)
         ):
 
             msg = (
@@ -158,10 +105,8 @@ async def main():
                 f"BUY BANKNIFTY {atm} CE\n\n"
                 f"Future : {fut_price}\n"
                 f"Source : {source}\n\n"
-                f"CALL BUY : {call_buy:.2f}Cr\n"
                 f"PUT WRITE : {put_write:.2f}Cr\n"
-                f"CALL SC : {call_sc:.2f}Cr\n"
-                f"FUTURE BUY : {fut_buy:.2f}Cr\n\n"
+                f"CALL SHORT COVER : {call_sc:.2f}Cr\n\n"
                 f"Bullish Turn : {bullish_turn:.2f}Cr\n"
                 f"Bearish Turn : {bearish_turn:.2f}Cr\n\n"
                 f"SL : 20 pts\n"
@@ -171,14 +116,13 @@ async def main():
             await client.send_message(TARGET_BOT_ID, msg)
 
         # ==============================
-        # 🔴 PUT BUY SIGNAL
+        # 🔴 PUT BUY
         # ==============================
 
         if (
-            put_buy > 2 and
-            (call_write > 2 or put_sc > 2) and
             bearish_turn > 10 and
-            bullish_turn < 1
+            bullish_turn < 1 and
+            (call_write > 2 or put_sc > 2)
         ):
 
             msg = (
@@ -186,10 +130,8 @@ async def main():
                 f"BUY BANKNIFTY {atm} PE\n\n"
                 f"Future : {fut_price}\n"
                 f"Source : {source}\n\n"
-                f"PUT BUY : {put_buy:.2f}Cr\n"
                 f"CALL WRITE : {call_write:.2f}Cr\n"
-                f"PUT SC : {put_sc:.2f}Cr\n"
-                f"FUTURE SELL : {fut_sell:.2f}Cr\n\n"
+                f"PUT SHORT COVER : {put_sc:.2f}Cr\n\n"
                 f"Bearish Turn : {bearish_turn:.2f}Cr\n"
                 f"Bullish Turn : {bullish_turn:.2f}Cr\n\n"
                 f"SL : 20 pts\n"
