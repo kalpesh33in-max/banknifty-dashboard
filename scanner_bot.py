@@ -17,6 +17,7 @@ TARGET_BOT_ID = int(os.getenv("TARGET_BOT"))
 
 IST = pytz.timezone("Asia/Kolkata")
 
+
 # ---------------- FUNCTIONS ---------------- #
 
 def get_atm(price):
@@ -25,9 +26,10 @@ def get_atm(price):
 
 def get_value(label, text):
     """
-    Extract Cr or L value and convert to Crore
+    Extract value in Cr or L and convert to Crore
     """
     match = re.search(rf"{label}.*?([\d.]+)(Cr|L)", text)
+
     if not match:
         return 0.0
 
@@ -41,18 +43,16 @@ def get_value(label, text):
 
 
 def get_future_price(text):
-    """
-    Extract BANKNIFTY FUT price
-    Example:
-    BANKNIFTY (FUT: 55644.0)
-    """
+
     match = re.search(r"BANKNIFTY \(FUT:\s*([\d.]+)\)", text)
+
     if match:
         return float(match.group(1))
+
     return None
 
 
-# ---------------- MARKET TIME ALERTS ---------------- #
+# ---------------- MARKET ALERT ---------------- #
 
 async def market_alerts(client):
 
@@ -67,14 +67,14 @@ async def market_alerts(client):
             if t == "09:15":
                 await client.send_message(
                     TARGET_BOT_ID,
-                    "🚀 MARKET OPEN\nBridge Activated"
+                    "🚀 MARKET OPEN\nInstitutional Flow Scanner Active"
                 )
                 await asyncio.sleep(60)
 
             elif t == "15:30":
                 await client.send_message(
                     TARGET_BOT_ID,
-                    "🏁 MARKET CLOSED\nScanner Standing By"
+                    "🏁 MARKET CLOSED\nScanner Stopped"
                 )
                 await asyncio.sleep(60)
 
@@ -102,8 +102,6 @@ async def main():
         print("MESSAGE RECEIVED")
         print(text)
 
-        # -------- FUT PRICE -------- #
-
         fut_price = get_future_price(text)
 
         if not fut_price:
@@ -113,17 +111,14 @@ async def main():
 
         # -------- OPTION VALUES -------- #
 
+        call_buy = get_value("CALL_BUY", text)
+        put_buy = get_value("PUT_BUY", text)
+
         call_write = get_value("CALL_WRITE", text)
         put_write = get_value("PUT_WRITE", text)
 
         call_sc = get_value("CALL_SC", text)
         put_sc = get_value("PUT_SC", text)
-
-        call_buy = get_value("CALL_BUY", text)
-        put_buy = get_value("PUT_BUY", text)
-
-        call_unw = get_value("CALL_UNW", text)
-        put_unw = get_value("PUT_UNW", text)
 
         # -------- FUTURES -------- #
 
@@ -135,61 +130,73 @@ async def main():
         bullish_turn = get_value("Bullish Turn", text)
         bearish_turn = get_value("Bearish Turn", text)
 
-        bias = text.upper()
-
-        # -------- SOURCE TYPE -------- #
+        # -------- SOURCE -------- #
 
         if event.chat_id == SOURCE_IDS[0]:
 
             source = "2 MIN FLOW"
-            threshold = 2
             target = 40
 
         else:
 
             source = "5 MIN FLOW"
-            threshold = 3
             target = 60
 
-        # -------- BEARISH SIGNAL -------- #
+        # ==============================
+        # 🟢 CALL BUY SIGNAL
+        # ==============================
 
-        if "VERY STRONG BEARISH" in bias:
+        if (
+            call_buy > 2 and
+            (put_write > 2 or call_sc > 2) and
+            bullish_turn > 10 and
+            bearish_turn < 1
+        ):
 
-            if bearish_turn > threshold:
+            msg = (
+                f"🟢 INSTITUTIONAL CALL BUY\n\n"
+                f"BUY BANKNIFTY {atm} CE\n\n"
+                f"Future : {fut_price}\n"
+                f"Source : {source}\n\n"
+                f"CALL BUY : {call_buy:.2f}Cr\n"
+                f"PUT WRITE : {put_write:.2f}Cr\n"
+                f"CALL SC : {call_sc:.2f}Cr\n"
+                f"FUTURE BUY : {fut_buy:.2f}Cr\n\n"
+                f"Bullish Turn : {bullish_turn:.2f}Cr\n"
+                f"Bearish Turn : {bearish_turn:.2f}Cr\n\n"
+                f"SL : 20 pts\n"
+                f"TARGET : {target} pts"
+            )
 
-                if call_write > 0.5 or put_sc > 0.5 or fut_sell > 1:
+            await client.send_message(TARGET_BOT_ID, msg)
 
-                    msg = (
-                        f"🔴 BUY BANKNIFTY {atm} PE\n\n"
-                        f"Future : {fut_price}\n"
-                        f"Source : {source}\n\n"
-                        f"Bias : VERY STRONG BEARISH\n"
-                        f"Bearish Turn : {bearish_turn:.2f}Cr\n\n"
-                        f"SL : 20 pts\n"
-                        f"TARGET : {target} pts"
-                    )
+        # ==============================
+        # 🔴 PUT BUY SIGNAL
+        # ==============================
 
-                    await client.send_message(TARGET_BOT_ID, msg)
+        if (
+            put_buy > 2 and
+            (call_write > 2 or put_sc > 2) and
+            bearish_turn > 10 and
+            bullish_turn < 1
+        ):
 
-        # -------- BULLISH SIGNAL -------- #
+            msg = (
+                f"🔴 INSTITUTIONAL PUT BUY\n\n"
+                f"BUY BANKNIFTY {atm} PE\n\n"
+                f"Future : {fut_price}\n"
+                f"Source : {source}\n\n"
+                f"PUT BUY : {put_buy:.2f}Cr\n"
+                f"CALL WRITE : {call_write:.2f}Cr\n"
+                f"PUT SC : {put_sc:.2f}Cr\n"
+                f"FUTURE SELL : {fut_sell:.2f}Cr\n\n"
+                f"Bearish Turn : {bearish_turn:.2f}Cr\n"
+                f"Bullish Turn : {bullish_turn:.2f}Cr\n\n"
+                f"SL : 20 pts\n"
+                f"TARGET : {target} pts"
+            )
 
-        if "VERY STRONG BULLISH" in bias:
-
-            if bullish_turn > threshold:
-
-                if put_write > 0.5 or call_sc > 0.5 or fut_buy > 1:
-
-                    msg = (
-                        f"🟢 BUY BANKNIFTY {atm} CE\n\n"
-                        f"Future : {fut_price}\n"
-                        f"Source : {source}\n\n"
-                        f"Bias : VERY STRONG BULLISH\n"
-                        f"Bullish Turn : {bullish_turn:.2f}Cr\n\n"
-                        f"SL : 20 pts\n"
-                        f"TARGET : {target} pts"
-                    )
-
-                    await client.send_message(TARGET_BOT_ID, msg)
+            await client.send_message(TARGET_BOT_ID, msg)
 
     await client.run_until_disconnected()
 
