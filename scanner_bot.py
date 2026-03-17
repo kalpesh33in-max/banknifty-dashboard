@@ -64,11 +64,17 @@ async def main():
         now = datetime.datetime.now()
         atm = get_atm(fut_price)
 
-        # ✅ Correct extraction
+        # ✅ FIXED EXTRACTION (ONLY CHANGE)
         call_write = extract_value(r"CALL_WR.*?\(([\d.]+)(Cr|L)\)", text)
         put_write = extract_value(r"PUT_WR.*?\(([\d.]+)(Cr|L)\)", text)
         bullish_turn = extract_value(r"Bullish Turn:\s*([\d.]+)(Cr|L)", text)
         bearish_turn = extract_value(r"Bearish Turn:\s*([\d.]+)(Cr|L)", text)
+
+        print("DEBUG:",
+              "CALL_WR:", call_write,
+              "PUT_WR:", put_write,
+              "BULL:", bullish_turn,
+              "BEAR:", bearish_turn)
 
         # ---------------- SOURCE ---------------- #
 
@@ -105,17 +111,19 @@ async def main():
             time_diff = (now - other["time"]).total_seconds()
 
             if other["type"] == signal_type and time_diff <= 60:
-
-                # ✅ FINAL CLEAN ALERT (YOUR FORMAT)
+                emoji = "🟢" if signal_type == "CALL" else "🔴"
+                
                 msg = (
-                    f"BUY BANKNIFTY {atm} {signal_type}E\n"
-                    f"SL = 30 POINT\n"
-                    f"TARGET = 50 POINT"
+                    f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+                    f"**ACTION: BUY BANKNIFTY {atm} {signal_type}E**\n\n"
+                    f"📊 2 MIN: {last_signals['2 MIN FLOW']['val']:.2f} Cr\n"
+                    f"📊 5 MIN: {last_signals['5 MIN FLOW']['val']:.2f} Cr\n"
+                    f"⏱ Gap: {int(time_diff)} sec\n"
+                    f"📈 FUT: {fut_price}"
                 )
 
                 await client.send_message(TARGET_BOT_ID, msg)
 
-                # Reset after alert
                 last_signals["2 MIN FLOW"]["type"] = None
                 last_signals["5 MIN FLOW"]["type"] = None
 
