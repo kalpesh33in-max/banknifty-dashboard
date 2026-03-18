@@ -31,11 +31,15 @@ def extract_value(pattern, text):
     match = re.search(pattern, text, re.IGNORECASE)
     if not match:
         return 0.0
+
     try:
         value = float(match.group(1))
-        unit = match.group(2).upper()
+        unit = match.group(2).upper().strip()
+
+        # 🔥 STRONG CONVERSION
         if unit == "L":
-            value = value / 100
+            value = value / 100.0   # 71.11L → 0.711 Cr
+
         return value
     except:
         return 0.0
@@ -50,7 +54,7 @@ async def main():
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
 
-    print("🚀 Dual Flow Bot (FINAL LOGIC ACTIVE)")
+    print("🚀 FINAL BOT (L→Cr FIX + PURE FLOW LOGIC)")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
@@ -95,7 +99,7 @@ async def main():
         if (
             bullish_turn >= min_turn and
             put_write >= min_write and
-            bearish_turn <= 1.0   # 🔥 purity filter
+            bearish_turn < 1.0   # STRICT < 1Cr
         ):
             signal_type = "CALL"
             current_val = put_write
@@ -104,7 +108,7 @@ async def main():
         elif (
             bearish_turn >= min_turn and
             call_write >= min_write and
-            bullish_turn <= 1.0   # 🔥 purity filter
+            bullish_turn < 1.0   # STRICT < 1Cr
         ):
             signal_type = "PUT"
             current_val = call_write
@@ -135,9 +139,11 @@ async def main():
 
                 msg = (
                     f"{emoji} BUY BANKNIFTY {atm} {signal_type}E\n\n"
-                    f"2M: {last_signals['2 MIN FLOW']['val']:.2f}Cr | "
-                    f"5M: {last_signals['5 MIN FLOW']['val']:.2f}Cr\n"
-                    f"Gap: {int(time_diff)}s"
+                    f"SL: 30 pts | Target: 50 pts\n\n"
+                    f"📊 2M Flow: {last_signals['2 MIN FLOW']['val']:.2f} Cr\n"
+                    f"📊 5M Flow: {last_signals['5 MIN FLOW']['val']:.2f} Cr\n"
+                    f"⏱ Match: {int(time_diff)} sec\n"
+                    f"📈 Bias: {'PURE BULLISH' if signal_type == 'CALL' else 'PURE BEARISH'}"
                 )
 
                 await client.send_message(TARGET_BOT_ID, msg)
