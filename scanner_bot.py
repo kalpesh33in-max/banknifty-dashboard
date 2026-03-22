@@ -57,13 +57,22 @@ async def main():
         fut_price = get_future_price(text)
         if not fut_price: return
 
+        # ISOLATE BANKNIFTY SECTION (Ignore other stocks like HDFC, SBIN)
+        try:
+            bn_section = text.split("💎 BANKNIFTY")[1].split("💎")[0]
+            # Further isolate the Options Part of only the BankNifty section
+            options_part = bn_section.split("---- FUTURES FLOW ----")[0]
+        except:
+            return # BANKNIFTY data not found in this report
+
         now = datetime.datetime.now()
         atm = get_atm(fut_price)
 
-        call_write = get_value("CALL_WR", text)
-        put_write = get_value("PUT_WR", text)
-        bullish_turn = get_value("Bullish Turn", text)
-        bearish_turn = get_value("Bearish Turn", text)
+        # 1. EXTRACTION (Scoped to BankNifty Options only)
+        call_write = get_value("CALL_WR", options_part)
+        put_write = get_value("PUT_WR", options_part)
+        bullish_turn = get_value("Bullish Turn", options_part)
+        bearish_turn = get_value("Bearish Turn", options_part)
 
         if event.chat_id == SOURCE_IDS[1]:  # 2 MIN
             current_source = "2 MIN FLOW"
