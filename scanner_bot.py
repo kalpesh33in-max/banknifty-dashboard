@@ -69,14 +69,17 @@ async def main():
         if not fut_price:
             return
 
+        # ISOLATE OPTIONS SECTION (Ignore everything after Futures starts)
+        options_part = text.split("---- FUTURES FLOW ----")[0]
+
         now = datetime.datetime.now()
         atm = get_atm(fut_price)
 
-        # 1. EXTRACTION
-        call_write = get_value("CALL_WR", text)
-        put_write = get_value("PUT_WR", text)
-        bullish_turn = get_value("Bullish Turn", text)
-        bearish_turn = get_value("Bearish Turn", text)
+        # 1. EXTRACTION (Scoped to Options Part only)
+        call_write = get_value("CALL_WR", options_part)
+        put_write = get_value("PUT_WR", options_part)
+        bullish_turn = get_value("Bullish Turn", options_part)
+        bearish_turn = get_value("Bearish Turn", options_part)
 
         # 2. SOURCE & CRITERIA ASSIGNMENT
         if event.chat_id == SOURCE_IDS[1]:  # angelk101239_bot (2 MIN)
@@ -114,8 +117,8 @@ async def main():
             other = last_signals[other_source]
             time_diff = (now - other["time"]).total_seconds()
 
-            # Verify if they match direction and time window (60s)
-            if other["type"] == signal_type and time_diff <= 60:
+            # Verify if they match direction and time window (30s)
+            if other["type"] == signal_type and time_diff <= 30:
                 emoji = "🟢" if signal_type == "CALL" else "🔴"
                 
                 # Format Alert Message
