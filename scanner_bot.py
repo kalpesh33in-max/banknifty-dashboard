@@ -94,7 +94,7 @@ async def main():
             other = last_signals[other_source]
             time_diff = (now - other["time"]).total_seconds()
 
-            if other["type"] == signal_type and time_diff <= 60:
+            if other["type"] == signal_type and time_diff <= 30:
                 emoji = "🟢" if signal_type == "CALL" else "🔴"
                 msg = (
                     f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
