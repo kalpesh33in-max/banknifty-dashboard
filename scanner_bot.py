@@ -84,8 +84,10 @@ async def main():
             min_turn, min_write = 2.5, 2.5
 
         signal_type = None
+        # CALL LOGIC: Bullish Turn >= threshold AND Put Writer >= threshold AND Bearish Turn < 1.0
         if bullish_turn >= min_turn and put_write >= min_write and bearish_turn < 1.0:
             signal_type = "CALL"
+        # PUT LOGIC: Bearish Turn >= threshold AND Call Writer >= threshold AND Bullish Turn < 1.0
         elif bearish_turn >= min_turn and call_write >= min_write and bullish_turn < 1.0:
             signal_type = "PUT"
 
