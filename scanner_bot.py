@@ -50,25 +50,31 @@ async def main():
     await client.start()
     
     print("🚀 Dual-Flow Match Bot Active")
+    print(f"📡 Monitoring Source IDs: {SOURCE_IDS}")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
         text = event.message.text
-        fut_price = get_future_price(text)
-        if not fut_price: return
+        
+        # LOGGING: This allows you to see if the bot is reading the source channels
+        source_name = "2 MIN" if event.chat_id == SOURCE_IDS[1] else "5 MIN"
+        print(f"📩 [{datetime.datetime.now(IST).strftime('%H:%M:%S')}] Received {source_name} Alert (ID: {event.chat_id})")
 
-        # ISOLATE BANKNIFTY SECTION (Ignore other stocks like HDFC, SBIN)
+        fut_price = get_future_price(text)
+        if not fut_price: 
+            return
+
+        # ISOLATE BANKNIFTY SECTION
         try:
             bn_section = text.split("💎 BANKNIFTY")[1].split("💎")[0]
-            # Further isolate the Options Part of only the BankNifty section
             options_part = bn_section.split("---- FUTURES FLOW ----")[0]
         except:
-            return # BANKNIFTY data not found in this report
+            return 
 
         now = datetime.datetime.now()
         atm = get_atm(fut_price)
 
-        # 1. EXTRACTION (Scoped to BankNifty Options only)
+        # 1. EXTRACTION
         call_write = get_value("CALL_WR", options_part)
         put_write = get_value("PUT_WR", options_part)
         bullish_turn = get_value("Bullish Turn", options_part)
@@ -84,19 +90,26 @@ async def main():
             min_turn, min_write = 2.5, 2.5
 
         signal_type = None
-        # CALL LOGIC: Bullish Turn >= threshold AND Put Writer >= threshold AND Bearish Turn < 1.0
+        # CALL LOGIC
         if bullish_turn >= min_turn and put_write >= min_write and bearish_turn < 1.0:
             signal_type = "CALL"
-        # PUT LOGIC: Bearish Turn >= threshold AND Call Writer >= threshold AND Bullish Turn < 1.0
+        # PUT LOGIC
         elif bearish_turn >= min_turn and call_write >= min_write and bullish_turn < 1.0:
             signal_type = "PUT"
 
         if signal_type:
-            last_signals[current_source] = {"type": signal_type, "time": now, "val": put_write if signal_type=="CALL" else call_write}
+            print(f"⚡ Potential {signal_type} Signal detected in {current_source}. Waiting for Match...")
+            last_signals[current_source] = {
+                "type": signal_type, 
+                "time": now, 
+                "val": put_write if signal_type=="CALL" else call_write
+            }
+            
             other = last_signals[other_source]
             time_diff = (now - other["time"]).total_seconds()
 
             if other["type"] == signal_type and time_diff <= 30:
+                print(f"✅ DUAL MATCH FOUND! Sending alert to Target...")
                 emoji = "🟢" if signal_type == "CALL" else "🔴"
                 msg = (
                     f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
@@ -104,6 +117,8 @@ async def main():
                     f"🛡️ SL: 20 pts | 🎯 TARGET: 50 pts"
                 )
                 await client.send_message(TARGET_BOT_ID, msg)
+                
+                # Reset after successful match
                 last_signals["2 MIN FLOW"]["type"] = None
                 last_signals["5 MIN FLOW"]["type"] = None
 
