@@ -17,6 +17,7 @@ TARGET_BOT_ID = int(os.getenv("TARGET_BOT"))
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# FIXED: Standardized names with spaces to match logic
 last_signals = {
     "2 MIN FLOW": {"type": None, "time": datetime.datetime.min},
     "5 MIN FLOW": {"type": None, "time": datetime.datetime.min}
@@ -27,7 +28,6 @@ def get_atm(price):
     return round(price / 100) * 100
 
 def get_value(label, text):
-    # Extracts number and unit (Cr/L) and converts all to Crore
     matches = re.findall(rf"{label}.*?([\d.]+)(Cr|L)", text)
     if not matches:
         return 0.0
@@ -52,7 +52,6 @@ async def main():
         
         # 1. ONLY READ BANKNIFTY SECTION
         try:
-            # Isolates text between BANKNIFTY and the next symbol
             bn_section = text.split("💎 BANKNIFTY")[1].split("💎")[0]
             options_part = bn_section.split("---- FUTURES FLOW ----")[0]
         except (IndexError, ValueError):
@@ -64,10 +63,12 @@ async def main():
         bull_t = get_value("Bullish Turn", options_part)
         bear_t = get_value("Bearish Turn", options_part)
 
-        # 3. LIVE LOG OUTPUT (As requested)
+        # 3. IDENTIFY SOURCE
         is_2min = (event.chat_id == SOURCE_IDS[1])
-        lbl = "2MIN" if is_2min else "5MIN"
-        print(f"📊 [{lbl}] Bull: {bull_t:.2f}Cr | PutWR: {put_wr:.2f}Cr | Bear: {bear_t:.2f}Cr | CallWR: {call_wr:.2f}Cr")
+        lbl = "2 MIN FLOW" if is_2min else "5 MIN FLOW"
+        short_lbl = "2MIN" if is_2min else "5MIN"
+        
+        print(f"📊 [{short_lbl}] Bull: {bull_t:.2f}Cr | PutWR: {put_wr:.2f}Cr | Bear: {bear_t:.2f}Cr | CallWR: {call_wr:.2f}Cr")
 
         fut_price = get_future_price(text)
         if not fut_price: return
@@ -76,7 +77,6 @@ async def main():
         atm = get_atm(fut_price)
 
         # 4. SIGNAL LOGIC
-        # Thresholds: 10Cr for 2MIN, 2.5Cr for 5MIN
         m_turn, m_wr = (10.0, 10.0) if is_2min else (2.5, 2.5)
         
         sig_type = None
@@ -86,25 +86,27 @@ async def main():
             sig_type = "PUT"
 
         if sig_type:
-            print(f"⚡ {lbl} Detected {sig_type} Pattern. Checking for Dual Match...")
-            last_signals[f"{lbl} FLOW"] = {"type": sig_type, "time": now}
+            print(f"⚡ {short_lbl} Pattern: {sig_type}. Checking Dual Match...")
+            last_signals[lbl] = {"type": sig_type, "time": now}
             
             # Check for match within 30 seconds
-            other_lbl = "5MIN FLOW" if is_2min else "2MIN FLOW"
-            other = last_signals[other_lbl]
+            other_lbl = "5 MIN FLOW" if is_2min else "2 MIN FLOW"
+            other = last_signals.get(other_lbl, {"type": None, "time": datetime.datetime.min}) # SAFETY CHECK
             
-            if other.get("type") == sig_type and (now - other["time"]).total_seconds() <= 30:
-                print(f"✅ DUAL MATCH CONFIRMED: Sending {sig_type} alert.")
-                emoji = "🟢" if sig_type == "CALL" else "🔴"
-                msg = (
-                    f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                    f"**ACTION: BUY BANKNIFTY {atm} {sig_type}E**\n\n"
-                    f"🛡️ SL: 20 pts | 🎯 TARGET: 50 pts"
-                )
-                await client.send_message(TARGET_BOT_ID, msg)
-                # Reset after signal
-                last_signals["2MIN FLOW"]["type"] = None
-                last_signals["5MIN FLOW"]["type"] = None
+            if other["type"] == sig_type:
+                time_diff = (now - other["time"]).total_seconds()
+                if time_diff <= 30:
+                    print(f"✅ DUAL MATCH CONFIRMED: Sending {sig_type} alert.")
+                    emoji = "🟢" if sig_type == "CALL" else "🔴"
+                    msg = (
+                        f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+                        f"**ACTION: BUY BANKNIFTY {atm} {sig_type}E**\n\n"
+                        f"🛡️ SL: 20 pts | 🎯 TARGET: 50 pts"
+                    )
+                    await client.send_message(TARGET_BOT_ID, msg)
+                    # Reset after signal
+                    last_signals["2 MIN FLOW"]["type"] = None
+                    last_signals["5 MIN FLOW"]["type"] = None
 
     await client.run_until_disconnected()
 
