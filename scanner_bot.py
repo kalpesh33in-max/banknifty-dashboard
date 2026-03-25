@@ -8,18 +8,15 @@ from telethon.sessions import StringSession
 from telethon.tl.types import PeerUser
 
 # ---------------- CONFIG ---------------- #
-# Pulling all sensitive data from Railway Variables for safety
 API_ID = int(os.getenv("TG_API_ID"))
 API_HASH = os.getenv("TG_API_HASH")
 SESSION_STR = os.getenv("TG_SESSION_STR")
 
-# IDs fetched from environment variables
 SOURCE_IDS = [int(i.strip()) for i in os.getenv("SOURCE_BOT").split(",")]
 TARGET_BOT_ID = int(os.getenv("TARGET_BOT")) 
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Tracks signals for Dual-Match logic
 last_signals = {
     "2 MIN FLOW": {"type": None, "time": datetime.datetime.min},
     "5 MIN FLOW": {"type": None, "time": datetime.datetime.min}
@@ -28,24 +25,19 @@ last_signals = {
 # ---------------- FUNCTIONS ---------------- #
 
 def get_atm(price):
-    """Rounds future price to nearest 100 strike."""
     return round(price / 100) * 100
 
 def get_itm_value(label, text):
-    """
-    Specifically targets the ITM column in the table.
-    Regex finds the label and extracts the value inside the FIRST parentheses.
-    """
-    # Matches: LABEL + spaces + lot count + (ValueCr/L)
+    # Specifically extracts the FIRST column (ITM) value
     matches = re.findall(rf"{label}\s+\d+\(([\d.]+)(Cr|L)\)", text)
     if not matches:
         return 0.0
-    val_str, unit = matches[0] # Taking the first match (ITM Column)
+    val_str, unit = matches[0] 
     value = float(val_str)
     return value if unit == "Cr" else value / 100
 
 def get_value(label, text):
-    """General extractor for bottom summary values (Bullish/Bearish Turn)."""
+    # General extractor for bottom summary values
     matches = re.findall(rf"{label}.*?([\d.]+)(Cr|L)", text)
     if not matches:
         return 0.0
@@ -54,21 +46,19 @@ def get_value(label, text):
     return value if unit == "Cr" else value / 100
 
 def get_future_price(text):
-    """Extracts the BANKNIFTY Future price from the header."""
     match = re.search(r"BANKNIFTY \(FUT:\s*([\d.]+)\)", text)
     return float(match.group(1)) if match else None
 
 async def safe_send(client, target_id, message):
-    """Prevents 'Could not find input entity' crash by refreshing dialogs if needed."""
     try:
         await client.send_message(target_id, message)
     except ValueError:
-        print(f"⚠️ Target ID {target_id} not in cache. Refreshing...")
+        print(f"⚠️ Entity {target_id} not cached. Refreshing dialogs...")
         await client.get_dialogs() 
         try:
             await client.send_message(PeerUser(user_id=target_id), message)
         except Exception as e:
-            print(f"❌ Delivery failed: {e}")
+            print(f"❌ Critical delivery error: {e}")
 
 # ---------------- MAIN ---------------- #
 
@@ -76,19 +66,19 @@ async def main():
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
     
-    print("🚀 Scanner Bot Active | ITM Weightage Logic Enabled")
+    print("🚀 Scanner Bot Active | ITM Weightage Logic | Full Logging On")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
         text = event.message.text
         
-        # 1. SET DYNAMIC THRESHOLDS
+        # 1. IDENTIFY TIMEFRAME & THRESHOLDS
         if "2 MIN" in text:
             lbl, short_lbl = "2 MIN FLOW", "2MIN"
-            m_turn, m_wr = 10.0, 10.0 # Requirement: 10Cr for 2min
+            m_turn, m_wr = 10.0, 10.0 
         elif "5 MIN" in text:
             lbl, short_lbl = "5 MIN FLOW", "5MIN"
-            m_turn, m_wr = 2.5, 2.5   # Requirement: 2.5Cr for 5min
+            m_turn, m_wr = 2.5, 2.5   
         else:
             return 
 
@@ -99,13 +89,13 @@ async def main():
         except (IndexError, ValueError):
             return 
 
-        # Extracting ITM-only writing and total turnover
         call_wr_itm = get_itm_value("CALL_WR", options_part)
         put_wr_itm = get_itm_value("PUT_WR", options_part)
         bull_t = get_value("Bullish Turn", options_part)
         bear_t = get_value("Bearish Turn", options_part)
 
-        print(f"📊 [{short_lbl}] Bull: {bull_t:.2f}Cr | ITM PutWR: {put_wr_itm:.2f}Cr | Bear: {bear_t:.2f}Cr | ITM CallWR: {call_wr_itm:.2f}Cr")
+        # FULL LOG OUTPUT: See exactly what the bot is reading
+        print(f"🔍 [{short_lbl} READ] BullTurn: {bull_t:.2f}Cr | PutWR(ITM): {put_wr_itm:.2f}Cr | BearTurn: {bear_t:.2f}Cr | CallWR(ITM): {call_wr_itm:.2f}Cr")
 
         fut_price = get_future_price(text)
         if not fut_price: return
@@ -113,7 +103,7 @@ async def main():
         now = datetime.datetime.now()
         atm = get_atm(fut_price)
 
-        # 3. ITM-BASED SIGNAL LOGIC
+        # 3. SIGNAL LOGIC
         sig_type = None
         if bull_t >= m_turn and put_wr_itm >= m_wr and bear_t < 1.0:
             sig_type = "CALL"
@@ -122,26 +112,29 @@ async def main():
 
         # 4. DUAL MATCH CHECK
         if sig_type:
-            print(f"⚡ {short_lbl} Pattern: {sig_type}. Checking Match...")
+            print(f"⚡ {short_lbl} Pattern: {sig_type} detected. Checking for Dual Match...")
             last_signals[lbl] = {"type": sig_type, "time": now}
             
             other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
             other = last_signals.get(other_lbl, {"type": None, "time": datetime.datetime.min})
             
-            # Match within 30 seconds
-            if other["type"] == sig_type and abs((now - other["time"]).total_seconds()) <= 30:
-                print(f"✅ DUAL MATCH CONFIRMED: Sending {sig_type} alert.")
-                emoji = "🟢" if sig_type == "CALL" else "🔴"
-                msg = (
-                    f"{emoji} **INSTITUTIONAL DUAL MATCH (ITM)** {emoji}\n\n"
-                    f"**ACTION: BUY BANKNIFTY {atm} {sig_type}E**\n\n"
-                    f"🛡️ SL: 20 pts | 🎯 TARGET: 50 pts"
-                )
-                await safe_send(client, TARGET_BOT_ID, msg)
-                
-                # Reset to prevent duplicate alerts
-                last_signals["2 MIN FLOW"]["type"] = None
-                last_signals["5 MIN FLOW"]["type"] = None
+            if other["type"] == sig_type:
+                time_diff = (now - other["time"]).total_seconds()
+                if abs(time_diff) <= 30:
+                    print(f"✅ DUAL MATCH CONFIRMED: Sending {sig_type} alert.")
+                    emoji = "🟢" if sig_type == "CALL" else "🔴"
+                    msg = (
+                        f"{emoji} **INSTITUTIONAL DUAL MATCH (ITM)** {emoji}\n\n"
+                        f"**ACTION: BUY BANKNIFTY {atm} {sig_type}E**\n\n"
+                        f"🛡️ SL: 20 pts | 🎯 TARGET: 50 pts"
+                    )
+                    await safe_send(client, TARGET_BOT_ID, msg)
+                    
+                    # Reset to avoid double-firing
+                    last_signals["2 MIN FLOW"]["type"] = None
+                    last_signals["5 MIN FLOW"]["type"] = None
+                else:
+                    print(f"⏳ Match found but time diff too large: {abs(time_diff):.1f}s")
 
     await client.run_until_disconnected()
 
