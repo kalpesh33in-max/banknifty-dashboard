@@ -78,7 +78,7 @@ async def main():
             m_turn, m_wr = 10.0, 10.0 
         elif "5 MIN" in text:
             lbl, short_lbl = "5 MIN FLOW", "5MIN"
-            m_turn, m_wr = 2.0, 2.0   
+            m_turn, m_wr = 1.5, 1.5   
         else:
             return 
 
