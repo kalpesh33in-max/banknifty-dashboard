@@ -17,6 +17,7 @@ TARGET_BOT_ID = int(os.getenv("TARGET_BOT"))
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# Tracks the last detected signal per timeframe
 last_signals = {
     "2 MIN FLOW": {"type": None, "time": datetime.datetime.min},
     "5 MIN FLOW": {"type": None, "time": datetime.datetime.min}
@@ -27,17 +28,24 @@ last_signals = {
 def get_atm(price):
     return round(price / 100) * 100
 
-def get_itm_value(label, text):
-    # Specifically extracts the FIRST column (ITM) value
-    matches = re.findall(rf"{label}\s+\d+\(([\d.]+)(Cr|L)\)", text)
+def get_writing_values(label, text):
+    """
+    Extracts two values from formats like: CALL_WR 123(4.50Cr)(6.20Cr)
+    Returns: (ITM_Value, OTM_Value) in Crores
+    """
+    # Regex looks for: Label -> Space -> Digits -> (Val1)(Val2)
+    matches = re.findall(rf"{label}\s+\d+\(([\d.]+)(Cr|L)\)\(([\d.]+)(Cr|L)\)", text)
     if not matches:
-        return 0.0
-    val_str, unit = matches[0] 
-    value = float(val_str)
-    return value if unit == "Cr" else value / 100
+        return 0.0, 0.0
+    
+    itm_val, itm_unit, otm_val, otm_unit = matches[0]
+    
+    itm = float(itm_val) if itm_unit == "Cr" else float(itm_val) / 100
+    otm = float(otm_val) if otm_unit == "Cr" else float(otm_val) / 100
+    return itm, otm
 
 def get_value(label, text):
-    # General extractor for bottom summary values
+    # General extractor for Bullish/Bearish Turn
     matches = re.findall(rf"{label}.*?([\d.]+)(Cr|L)", text)
     if not matches:
         return 0.0
@@ -52,13 +60,10 @@ def get_future_price(text):
 async def safe_send(client, target_id, message):
     try:
         await client.send_message(target_id, message)
-    except ValueError:
-        print(f"⚠️ Entity {target_id} not cached. Refreshing dialogs...")
-        await client.get_dialogs() 
-        try:
-            await client.send_message(PeerUser(user_id=target_id), message)
-        except Exception as e:
-            print(f"❌ Critical delivery error: {e}")
+    except Exception as e:
+        print(f"⚠️ Delivery error: {e}. Refreshing dialogs...")
+        await client.get_dialogs()
+        await client.send_message(PeerUser(user_id=target_id), message)
 
 # ---------------- MAIN ---------------- #
 
@@ -66,19 +71,22 @@ async def main():
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
     
-    print("🚀 Scanner Bot Active | ITM Weightage Logic | Full Logging On")
+    print("🚀 Scanner Active | 10s Dual-Match | 4Cr ITM + 6Cr OTM Logic")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
         text = event.message.text
+        now = datetime.datetime.now()
         
         # 1. IDENTIFY TIMEFRAME & THRESHOLDS
         if "2 MIN" in text:
             lbl, short_lbl = "2 MIN FLOW", "2MIN"
-            m_turn, m_wr = 10.0, 10.0 
+            m_turn = 10.0
+            m_itm, m_otm = 4.0, 6.0  # Your updated 2min criteria
         elif "5 MIN" in text:
             lbl, short_lbl = "5 MIN FLOW", "5MIN"
-            m_turn, m_wr = 1.0, 1.0   
+            m_turn = 1.0             # Keeping standard 5min thresholds
+            m_itm, m_otm = 1.0, 0.0  
         else:
             return 
 
@@ -89,52 +97,51 @@ async def main():
         except (IndexError, ValueError):
             return 
 
-        call_wr_itm = get_itm_value("CALL_WR", options_part)
-        put_wr_itm = get_itm_value("PUT_WR", options_part)
+        call_itm, call_otm = get_writing_values("CALL_WR", options_part)
+        put_itm, put_otm = get_writing_values("PUT_WR", options_part)
         bull_t = get_value("Bullish Turn", options_part)
         bear_t = get_value("Bearish Turn", options_part)
 
-        # FULL LOG OUTPUT: See exactly what the bot is reading
-        print(f"🔍 [{short_lbl} READ] BullTurn: {bull_t:.2f}Cr | PutWR(ITM): {put_wr_itm:.2f}Cr | BearTurn: {bear_t:.2f}Cr | CallWR(ITM): {call_wr_itm:.2f}Cr")
-
-        fut_price = get_future_price(text)
-        if not fut_price: return
-        
-        now = datetime.datetime.now()
-        atm = get_atm(fut_price)
+        print(f"🔍 [{short_lbl}] Bull:{bull_t} | Bear:{bear_t} | ITM/OTM: {put_itm}/{put_otm}")
 
         # 3. SIGNAL LOGIC
         sig_type = None
-        if bull_t >= m_turn and put_wr_itm >= m_wr and bear_t < 1.0:
+        # CALL Logic: High Bull Turn + High Put Writing (ITM/OTM)
+        if bull_t >= m_turn and put_itm >= m_itm and put_otm >= m_otm and bear_t < 1.0:
             sig_type = "CALL"
-        elif bear_t >= m_turn and call_wr_itm >= m_wr and bull_t < 1.0:
+        # PUT Logic: High Bear Turn + High Call Writing (ITM/OTM)
+        elif bear_t >= m_turn and call_itm >= m_itm and call_otm >= m_otm and bull_t < 1.0:
             sig_type = "PUT"
 
-        # 4. DUAL MATCH CHECK
         if sig_type:
-            print(f"⚡ {short_lbl} Pattern: {sig_type} detected. Checking for Dual Match...")
             last_signals[lbl] = {"type": sig_type, "time": now}
-            
+            print(f"⚡ {short_lbl} {sig_type} detected. Checking match...")
+
+            # 4. 10-SECOND DUAL MATCH CHECK
             other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
-            other = last_signals.get(other_lbl, {"type": None, "time": datetime.datetime.min})
-            
+            other = last_signals.get(other_lbl)
+
             if other["type"] == sig_type:
                 time_diff = (now - other["time"]).total_seconds()
-                if abs(time_diff) <= 30:
-                    print(f"✅ DUAL MATCH CONFIRMED: Sending {sig_type} alert.")
+                
+                # Check if the other timeframe's alert arrived within 10 seconds
+                if abs(time_diff) <= 10:
+                    fut_price = get_future_price(text)
+                    atm = get_atm(fut_price) if fut_price else "ATM"
+                    
+                    print(f"✅ DUAL MATCH ({time_diff:.1f}s) - Sending Alert!")
                     emoji = "🟢" if sig_type == "CALL" else "🔴"
                     msg = (
-                        f"{emoji} **INSTITUTIONAL DUAL MATCH (ITM)** {emoji}\n\n"
-                        f"**ACTION: BUY BANKNIFTY {atm} {sig_type}E**\n\n"
+                        f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+                        f"**ACTION: BUY BANKNIFTY {atm} {sig_type}E**\n"
+                        f"**WINDOW: {abs(time_diff):.1f}s Match**\n\n"
                         f"🛡️ SL: 20 pts | 🎯 TARGET: 50 pts"
                     )
                     await safe_send(client, TARGET_BOT_ID, msg)
                     
-                    # Reset to avoid double-firing
+                    # Reset to prevent duplicate alerts
                     last_signals["2 MIN FLOW"]["type"] = None
                     last_signals["5 MIN FLOW"]["type"] = None
-                else:
-                    print(f"⏳ Match found but time diff too large: {abs(time_diff):.1f}s")
 
     await client.run_until_disconnected()
 
