@@ -79,7 +79,7 @@ async def main():
         if "2 MIN" in text:
             lbl, short_lbl = "2 MIN FLOW", "2MIN"
             m_turn = 10.0
-            m_itm, m_otm = 4.0, 6.0 
+            m_itm, m_otm = 7.0, 3.0 
         elif "5 MIN" in text:
             lbl, short_lbl = "5 MIN FLOW", "5MIN"
             m_turn, m_itm, m_otm = 1.0, 1.0, 0.0  
@@ -113,16 +113,16 @@ async def main():
 
         if sig_type:
             last_signals[lbl] = {"type": sig_type, "time": now}
-            print(f"⚡ {short_lbl} {sig_type} SIGNAL DETECTED. Waiting for Dual Match (10s)...")
+            print(f"⚡ {short_lbl} {sig_type} SIGNAL DETECTED. Waiting for Dual Match (30s)...")
 
-            # 4. 10-SECOND DUAL MATCH CHECK
+            # 4. 30-SECOND DUAL MATCH CHECK
             other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
             other = last_signals.get(other_lbl)
 
             if other["type"] == sig_type:
                 time_diff = (now - other["time"]).total_seconds()
                 
-                if abs(time_diff) <= 10:
+                if abs(time_diff) <= 30:
                     fut_price = get_future_price(text)
                     atm_strike = get_atm(fut_price) if fut_price else "ATM"
                     suffix = "CE" if sig_type == "CALL" else "PE"
