@@ -29,26 +29,35 @@ def get_atm(price):
     return int(round(price / 100) * 100)
 
 def get_writing_values(label, text):
-    # Regex to capture ITM and OTM specifically: Label 123(ITM)(OTM)
-    matches = re.findall(rf"{label}\s+\d+\(([\d.]+)(Cr|L)\)\(([\d.]+)(Cr|L)\)", text)
+    # Updated Regex to handle: Label LOTS(VAL_UNIT) LOTS(VAL_UNIT) with flexible spacing
+    # Matches: PUT_WR     194(2.42Cr)          0(0)
+    pattern = rf"{label}\s+\d+\(([\d.]+)(Cr|L|)\)\s+\d+\(([\d.]+)(Cr|L|)\)"
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    
     if not matches:
         return 0.0, 0.0
     
     itm_val, itm_unit, otm_val, otm_unit = matches[0]
-    itm = float(itm_val) if itm_unit == "Cr" else float(itm_val) / 100
-    otm = float(otm_val) if otm_unit == "Cr" else float(otm_val) / 100
+    
+    itm = float(itm_val) if itm_unit == "Cr" else (float(itm_val) / 100 if itm_unit == "L" else 0.0)
+    otm = float(otm_val) if otm_unit == "Cr" else (float(otm_val) / 100 if otm_unit == "L" else 0.0)
+    
     return itm, otm
 
 def get_value(label, text):
-    matches = re.findall(rf"{label}.*?([\d.]+)(Cr|L)", text)
+    # Flexible regex for Turnovers: Bullish Turn: 15.35Cr or 88.78L
+    pattern = rf"{label}\s*:\s*([\d.]+)(Cr|L|)"
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    
     if not matches:
         return 0.0
+        
     val_str, unit = matches[-1]
     value = float(val_str)
-    return value if unit == "Cr" else value / 100
+    return value if unit == "Cr" else (value / 100 if unit == "L" else 0.0)
 
 def get_future_price(text):
-    match = re.search(r"BANKNIFTY \(FUT:\s*([\d.]+)\)", text)
+    match = re.search(r"BANKNIFTY\s*\(FUT:\s*([\d.]+)\)", text, re.IGNORECASE)
     return float(match.group(1)) if match else None
 
 async def safe_send(client, target_id, message):
@@ -70,25 +79,26 @@ async def main():
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
         text = event.message.text
+        if not text: return
+        
         now = datetime.datetime.now()
         
-        # LOG EVERY MESSAGE RECEIVED FOR VISIBILITY
-        print(f"📩 [NEW MESSAGE] From Chat ID: {event.chat_id} | Time: {now.strftime('%H:%M:%S')}")
-
         # 1. IDENTIFY TIMEFRAME
-        if "2 MIN" in text:
+        if "2 MIN" in text.upper():
             lbl, short_lbl = "2 MIN FLOW", "2MIN"
             m_turn = 10.0
             m_itm, m_otm = 7.0, 3.0 
-        elif "5 MIN" in text:
+        elif "5 MIN" in text.upper():
             lbl, short_lbl = "5 MIN FLOW", "5MIN"
             m_turn, m_itm, m_otm = 1.0, 1.0, 0.0  
         else:
-            print(f"⏩ Skipping message: No '2 MIN' or '5 MIN' keyword found.")
             return 
 
         # 2. DATA EXTRACTION
         try:
+            if "💎 BANKNIFTY" not in text:
+                return
+                
             bn_section = text.split("💎 BANKNIFTY")[1].split("💎")[0]
             options_part = bn_section.split("---- FUTURES FLOW ----")[0]
             
