@@ -83,6 +83,9 @@ async def main():
         
         now = datetime.datetime.now()
         
+        # LOG EVERY MESSAGE RECEIVED FOR VISIBILITY
+        print(f"📩 [NEW MESSAGE] From Chat ID: {event.chat_id} | Time: {now.strftime('%H:%M:%S')}")
+        
         # 1. IDENTIFY TIMEFRAME
         if "2 MIN" in text.upper():
             lbl, short_lbl = "2 MIN FLOW", "2MIN"
