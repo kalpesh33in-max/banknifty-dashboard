@@ -36,10 +36,21 @@ INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY"]
 STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
 WATCH_SYMBOLS = INDEX_SYMBOLS + STOCK_SYMBOLS
 FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
+DEFAULT_STRIKE_STEP = int(os.getenv("DEFAULT_STRIKE_STEP", "100"))
+STRIKE_STEPS = {
+    "BANKNIFTY": int(os.getenv("BANKNIFTY_STRIKE_STEP", "100")),
+    "NIFTY": int(os.getenv("NIFTY_STRIKE_STEP", "50")),
+    "SENSEX": int(os.getenv("SENSEX_STRIKE_STEP", "100")),
+    "MIDCPNIFTY": int(os.getenv("MIDCPNIFTY_STRIKE_STEP", "25")),
+    "HDFCBANK": int(os.getenv("HDFCBANK_STRIKE_STEP", "10")),
+    "ICICIBANK": int(os.getenv("ICICIBANK_STRIKE_STEP", "10")),
+    "RELIANCE": int(os.getenv("RELIANCE_STRIKE_STEP", "20")),
+}
 
 
-def get_atm(price):
-    return int(round(price / 100) * 100)
+def get_atm(price, symbol="BANKNIFTY"):
+    step = STRIKE_STEPS.get(symbol.upper(), DEFAULT_STRIKE_STEP)
+    return int(((float(price) + (step / 2)) // step) * step)
 
 
 def risk_points_for(symbol):
@@ -255,7 +266,7 @@ async def main():
                 time_diff = (now - other["time"]).total_seconds()
                 if abs(time_diff) <= 30:
                     fut_price = get_future_price(text, symbol=symbol)
-                    atm_strike = get_atm(fut_price) if fut_price else "ATM"
+                    atm_strike = get_atm(fut_price, symbol) if fut_price else "ATM"
                     suffix = "CE" if sig_type_fut == "CALL" else "PE"
                     emoji = "??" if sig_type_fut == "CALL" else "??"
 
@@ -350,7 +361,7 @@ async def main():
                 time_diff = (now - other["time"]).total_seconds()
                 if abs(time_diff) <= 30:
                     fut_price = get_future_price(text, symbol=symbol)
-                    atm_strike = get_atm(fut_price) if fut_price else "ATM"
+                    atm_strike = get_atm(fut_price, symbol) if fut_price else "ATM"
                     suffix = "CE" if sig_type == "CALL" else "PE"
                     emoji = "??" if sig_type == "CALL" else "??"
                     flow_line = (
@@ -393,7 +404,7 @@ async def main():
                     }
 
                 fut_price = get_future_price(text, symbol=symbol)
-                atm_strike = get_atm(fut_price) if fut_price else "ATM"
+                atm_strike = get_atm(fut_price, symbol) if fut_price else "ATM"
                 sl_points, target_points = risk_points_for(symbol)
 
                 # (a) Instant 2MIN ITM writer >= 10Cr
