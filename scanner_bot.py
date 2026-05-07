@@ -32,14 +32,18 @@ last_fut_signals = {}
 last_index_signals = {}
 # ---------------- FUNCTIONS ---------------- #
 
-WATCH_SYMBOLS = ["BANKNIFTY", "NIFTY", "HDFCBANK", "ICICIBANK", "MIDCPNIFTY"]
-
-
-
 INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY"]
+STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
+WATCH_SYMBOLS = INDEX_SYMBOLS + STOCK_SYMBOLS
 FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
+
+
 def get_atm(price):
     return int(round(price / 100) * 100)
+
+
+def risk_points_for(symbol):
+    return (3, 6) if symbol.upper() in STOCK_SYMBOLS else (30, 60)
 
 
 def _normalize_cr(value, unit):
@@ -372,13 +376,11 @@ async def main():
                     last_index_signals[symbol]["2 MIN FLOW"]["type"] = None
                     last_index_signals[symbol]["5 MIN FLOW"]["type"] = None
 
-        # 5. Additional logic for other symbols (non-BANKNIFTY only)
-        # - Keep legacy BANKNIFTY logic unchanged above.
-        # - For other symbols, add:
-        #   a) Instant 2MIN alert if ITM writer >= 10Cr (no 5MIN confirmation)
-        #   b) Additional dual-match thresholds (2MIN+5MIN within 30s) as requested
+        # 5. Additional symbol logic
+        # - Instant 2MIN alert applies to all watched index/stock symbols.
+        # - Additional 2MIN+5MIN thresholds apply to non-BANKNIFTY symbols.
         if short_lbl == "2MIN":
-            for symbol in [s for s in WATCH_SYMBOLS if s != "BANKNIFTY"]:
+            for symbol in WATCH_SYMBOLS:
                 section = extract_instrument_section(text, symbol)
                 metrics = parse_flow_metrics(section)
                 if not metrics:
@@ -392,6 +394,7 @@ async def main():
 
                 fut_price = get_future_price(text, symbol=symbol)
                 atm_strike = get_atm(fut_price) if fut_price else "ATM"
+                sl_points, target_points = risk_points_for(symbol)
 
                 # (a) Instant 2MIN ITM writer >= 10Cr
                 if metrics["put_itm"] >= 10.0:
@@ -404,8 +407,8 @@ async def main():
                         f"**ACTION: BUY {symbol} {atm_strike} CE**\n"
                         f"**SIGNAL: CALL (2MIN ITM WRITER >= 10Cr)**\n"
                         f"**BULLISH TURN: {metrics['bull_t']:.2f}Cr | ITM PUT: {metrics['put_itm']:.2f}Cr**\n\n"
-                        f"🛡️ **SL: 30 pts**\n"
-                        f"🎯 **TARGET: 60 pts**"
+                        f"🛡️ **SL: {sl_points} pts**\n"
+                        f"🎯 **TARGET: {target_points} pts**"
                     )
                     await safe_send(client, TARGET_BOT_ID, msg)
                     continue
@@ -420,10 +423,13 @@ async def main():
                         f"**ACTION: BUY {symbol} {atm_strike} PE**\n"
                         f"**SIGNAL: PUT (2MIN ITM WRITER >= 10Cr)**\n"
                         f"**BEARISH TURN: {metrics['bear_t']:.2f}Cr | ITM CALL: {metrics['call_itm']:.2f}Cr**\n\n"
-                        f"🛡️ **SL: 30 pts**\n"
-                        f"🎯 **TARGET: 60 pts**"
+                        f"🛡️ **SL: {sl_points} pts**\n"
+                        f"🎯 **TARGET: {target_points} pts**"
                     )
                     await safe_send(client, TARGET_BOT_ID, msg)
+                    continue
+
+                if symbol == "BANKNIFTY":
                     continue
 
                 # (b) Additional dual-match thresholds (NON-BANKNIFTY)
@@ -456,8 +462,8 @@ async def main():
                             f"**ACTION: BUY {symbol} {atm_strike} {suffix}**\n"
                             f"**SIGNAL: {sig2} (Matched in {abs(time_diff):.1f}s)**\n"
                             f"{flow_line}\n\n"
-                            f"🛡️ **SL: 30 pts**\n"
-                            f"🎯 **TARGET: 60 pts**"
+                            f"🛡️ **SL: {sl_points} pts**\n"
+                            f"🎯 **TARGET: {target_points} pts**"
                         )
                         await safe_send(client, TARGET_BOT_ID, msg)
 
