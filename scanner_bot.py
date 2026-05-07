@@ -23,15 +23,21 @@ last_signals = {
     "5 MIN FLOW": {"type": None, "time": datetime.datetime.min}
 }
 
-last_option_flow_alert = {"type": None, "time": datetime.datetime.min}
+last_option_flow_alert = {"type": None, "time": datetime.datetime.min, "symbol": None}
 last_signals_by_symbol = {}
 instant_itm_alerts = {}
 
+
+last_fut_signals = {}
+last_index_signals = {}
 # ---------------- FUNCTIONS ---------------- #
 
 WATCH_SYMBOLS = ["BANKNIFTY", "NIFTY", "HDFCBANK", "ICICIBANK", "MIDCPNIFTY"]
 
 
+
+INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY"]
+FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
 def get_atm(price):
     return int(round(price / 100) * 100)
 
@@ -86,7 +92,10 @@ def get_future_price(text, symbol="BANKNIFTY"):
 
 
 def extract_instrument_section(text, symbol):
-    m = re.search(rf"{re.escape(symbol)}\s*\(FUT:", text, re.IGNORECASE)
+    # Important: avoid substring collisions (e.g. "NIFTY" matching inside "BANKNIFTY" / "FINNIFTY").
+    # Require the symbol to NOT be preceded by an alphanumeric/underscore.
+    sym_pat = rf"(?<![A-Z0-9_]){re.escape(symbol)}\s*\(FUT:"
+    m = re.search(sym_pat, text, re.IGNORECASE)
     if not m:
         return None
     start = m.start()
@@ -95,7 +104,8 @@ def extract_instrument_section(text, symbol):
     for sym in WATCH_SYMBOLS:
         if sym.upper() == symbol.upper():
             continue
-        m2 = re.search(rf"{re.escape(sym)}\s*\(FUT:", text[m.end():], re.IGNORECASE)
+        sym2_pat = rf"(?<![A-Z0-9_]){re.escape(sym)}\s*\(FUT:"
+        m2 = re.search(sym2_pat, text[m.end():], re.IGNORECASE)
         if m2:
             next_positions.append(m.end() + m2.start())
     end = min(next_positions) if next_positions else len(text)
@@ -121,6 +131,14 @@ def parse_flow_metrics(section_text):
         "put_otm": put_otm,
     }
 
+def parse_fut_lots(section_text):
+    if not section_text:
+        return None
+    m = re.search(r"(FUT_BUY|FUT_SELL)\s*:\s*(\d+)\s+lots", section_text, re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).upper(), int(m.group(2))
+
 async def safe_send(client, target_id, message):
     try:
         await client.send_message(target_id, message)
@@ -130,7 +148,7 @@ async def safe_send(client, target_id, message):
         await client.send_message(PeerUser(user_id=target_id), message)
 
 
-async def maybe_send_option_flow_alert(client, now, fut_price, bull_t, bear_t, put_itm, put_otm, call_itm, call_otm):
+async def maybe_send_option_flow_alert(client, now, symbol, fut_price, bull_t, bear_t, put_itm, put_otm, call_itm, call_otm):
     global last_option_flow_alert
 
     bull_ok = bull_t >= 10.0 and bear_t < 1.0 and (put_itm > 0 or put_otm > 0)
@@ -165,17 +183,17 @@ async def maybe_send_option_flow_alert(client, now, fut_price, bull_t, bear_t, p
             f"**CALL WRITER: ITM {call_itm:.2f}Cr | OTM {call_otm:.2f}Cr**",
         ]
 
-    if last_option_flow_alert["type"] == alert_type:
+    if last_option_flow_alert["type"] == alert_type and last_option_flow_alert.get("symbol") == symbol:
         time_diff = (now - last_option_flow_alert["time"]).total_seconds()
         if time_diff < 45:
             return
 
     msg = (
-        f"{emoji} **2 MIN OPTION FLOW ALERT** {emoji}\n\n"
+        f"{emoji} **2 MIN OPTION FLOW ALERT ({symbol})** {emoji}\n\n"
         + "\n".join(detail_lines)
     )
     await safe_send(client, TARGET_BOT_ID, msg)
-    last_option_flow_alert = {"type": alert_type, "time": now}
+    last_option_flow_alert = {"type": alert_type, "time": now, "symbol": symbol}
 
 # ---------------- MAIN ---------------- #
 
@@ -206,10 +224,58 @@ async def main():
         else:
             return 
 
+        # 1b. FUTURES LOT DUAL MATCH (indices)
+        # Triggers when FUT_BUY/FUT_SELL lots >= FUT_LOT_THRESHOLD in BOTH 2MIN and 5MIN within 30s.
+        for symbol in INDEX_SYMBOLS:
+            section = extract_instrument_section(text, symbol)
+            fut = parse_fut_lots(section)
+            if not fut:
+                continue
+            fut_type, fut_lots = fut
+            if fut_lots < FUT_LOT_THRESHOLD:
+                continue
+
+            sig_type_fut = "CALL" if fut_type == "FUT_BUY" else "PUT"
+
+            if symbol not in last_fut_signals:
+                last_fut_signals[symbol] = {
+                    "2 MIN FLOW": {"type": None, "time": datetime.datetime.min},
+                    "5 MIN FLOW": {"type": None, "time": datetime.datetime.min},
+                }
+
+            last_fut_signals[symbol][lbl] = {"type": sig_type_fut, "time": now}
+            other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
+            other = last_fut_signals[symbol].get(other_lbl)
+
+            if other and other["type"] == sig_type_fut:
+                time_diff = (now - other["time"]).total_seconds()
+                if abs(time_diff) <= 30:
+                    fut_price = get_future_price(text, symbol=symbol)
+                    atm_strike = get_atm(fut_price) if fut_price else "ATM"
+                    suffix = "CE" if sig_type_fut == "CALL" else "PE"
+                    emoji = "??" if sig_type_fut == "CALL" else "??"
+
+                    msg = (
+                        f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+                        f"**ACTION: BUY {symbol} {atm_strike} {suffix}**\n"
+                        f"**SIGNAL: {sig_type_fut} (FUT lots >= {FUT_LOT_THRESHOLD}, matched in {abs(time_diff):.1f}s)**\n"
+                        f"**{fut_type}: {fut_lots} lots**\n\n"
+                        f"??? **SL: 30 pts**\n"
+                        f"?? **TARGET: 60 pts**"
+                    )
+                    await safe_send(client, TARGET_BOT_ID, msg)
+
+
+                    # Reset this symbol's futures signals after alert
+                    last_fut_signals[symbol]["2 MIN FLOW"]["type"] = None
+                    last_fut_signals[symbol]["5 MIN FLOW"]["type"] = None
+
+
         # 2. DATA EXTRACTION
         try:
             if "💎 BANKNIFTY" not in text:
-                return
+                # BANKNIFTY section missing; pad so the legacy split logic doesn't crash.
+                text = 'ðŸ’Ž BANKNIFTY' + text
                 
             bn_section = text.split("💎 BANKNIFTY")[1].split("💎")[0]
             options_part = bn_section.split("---- FUTURES FLOW ----")[0]
@@ -227,65 +293,84 @@ async def main():
             return 
 
         if short_lbl == "2MIN":
-            fut_price = get_future_price(text)
-            await maybe_send_option_flow_alert(
-                client,
-                now,
-                fut_price,
-                bull_t,
-                bear_t,
-                put_itm,
-                put_otm,
-                call_itm,
-                call_otm,
-            )
+            # 2 MIN OPTION FLOW ALERT applies to all configured symbols (not only BANKNIFTY).
+            for symbol in WATCH_SYMBOLS:
+                section = extract_instrument_section(text, symbol)
+                metrics = parse_flow_metrics(section)
+                if not metrics:
+                    continue
+                fut_price = get_future_price(text, symbol=symbol)
+                await maybe_send_option_flow_alert(
+                    client,
+                    now,
+                    symbol,
+                    fut_price,
+                    metrics["bull_t"],
+                    metrics["bear_t"],
+                    metrics["put_itm"],
+                    metrics["put_otm"],
+                    metrics["call_itm"],
+                    metrics["call_otm"],
+                )
 
-        # 3. SIGNAL LOGIC
-        sig_type = None
-        if bull_t >= m_turn and put_itm >= m_itm and bear_t < 1.0:
-            sig_type = "CALL"
-        elif bear_t >= m_turn and call_itm >= m_itm and bull_t < 1.0:
-            sig_type = "PUT"
+        # 3. SIGNAL LOGIC (INDEX DUAL MATCH: BANKNIFTY/NIFTY/SENSEX/MIDCPNIFTY)
+        # Same thresholds as legacy BANKNIFTY dual-match, but applied per-index.
+        for symbol in INDEX_SYMBOLS:
+            section = extract_instrument_section(text, symbol)
+            metrics = parse_flow_metrics(section)
+            if not metrics:
+                continue
 
-        if sig_type:
-            last_signals[lbl] = {"type": sig_type, "time": now}
-            print(f"⚡ {short_lbl} {sig_type} SIGNAL DETECTED. Waiting for Dual Match (30s)...")
+            sig_type = None
+            if metrics["bull_t"] >= m_turn and metrics["put_itm"] >= m_itm and metrics["bear_t"] < 1.0:
+                sig_type = "CALL"
+            elif metrics["bear_t"] >= m_turn and metrics["call_itm"] >= m_itm and metrics["bull_t"] < 1.0:
+                sig_type = "PUT"
 
-            # 4. 30-SECOND DUAL MATCH CHECK
+            if not sig_type:
+                continue
+
+            if symbol not in last_index_signals:
+                last_index_signals[symbol] = {
+                    "2 MIN FLOW": {"type": None, "time": datetime.datetime.min},
+                    "5 MIN FLOW": {"type": None, "time": datetime.datetime.min},
+                }
+
+            last_index_signals[symbol][lbl] = {"type": sig_type, "time": now}
+            print(f"? {short_lbl} {symbol} {sig_type} SIGNAL DETECTED. Waiting for Dual Match (30s)...")
+
             other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
-            other = last_signals.get(other_lbl)
+            other = last_index_signals[symbol].get(other_lbl)
 
-            if other["type"] == sig_type:
+            if other and other["type"] == sig_type:
                 time_diff = (now - other["time"]).total_seconds()
-                
                 if abs(time_diff) <= 30:
-                    fut_price = get_future_price(text)
+                    fut_price = get_future_price(text, symbol=symbol)
                     atm_strike = get_atm(fut_price) if fut_price else "ATM"
                     suffix = "CE" if sig_type == "CALL" else "PE"
-                    emoji = "🟢" if sig_type == "CALL" else "🔴"
+                    emoji = "??" if sig_type == "CALL" else "??"
                     flow_line = (
-                        f"**BULLISH TURN: {bull_t:.2f}Cr | ITM PUT: {put_itm:.2f}Cr**"
+                        f"**BULLISH TURN: {metrics['bull_t']:.2f}Cr | ITM PUT: {metrics['put_itm']:.2f}Cr**"
                         if sig_type == "CALL"
-                        else f"**BEARISH TURN: {bear_t:.2f}Cr | ITM CALL: {call_itm:.2f}Cr**"
+                        else f"**BEARISH TURN: {metrics['bear_t']:.2f}Cr | ITM CALL: {metrics['call_itm']:.2f}Cr**"
                     )
-                    
-                    print(f"✅ SUCCESS: Dual Match confirmed in {abs(time_diff):.1f}s. Sending Alert.")
-                    
+
+                    print(f"? SUCCESS: {symbol} Dual Match confirmed in {abs(time_diff):.1f}s. Sending Alert.")
+
                     msg = (
                         f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                        f"**ACTION: BUY BANKNIFTY {atm_strike} {suffix}**\n"
+                        f"**ACTION: BUY {symbol} {atm_strike} {suffix}**\n"
                         f"**SIGNAL: {sig_type} (Matched in {abs(time_diff):.1f}s)**\n"
                         f"{flow_line}\n\n"
-                        f"🛡️ **SL: 30 pts**\n"
-                        f"🎯 **TARGET: 60 pts**"
+                        f"??? **SL: 30 pts**\n"
+                        f"?? **TARGET: 60 pts**"
                     )
                     await safe_send(client, TARGET_BOT_ID, msg)
-                    
-                    # Reset
-                    last_signals["2 MIN FLOW"]["type"] = None
-                    last_signals["5 MIN FLOW"]["type"] = None
-                else:
-                    print(f"⏳ Match found but time difference too high: {abs(time_diff):.1f}s")
+
+
+                    # Reset this symbol after alert
+                    last_index_signals[symbol]["2 MIN FLOW"]["type"] = None
+                    last_index_signals[symbol]["5 MIN FLOW"]["type"] = None
 
         # 5. Additional logic for other symbols (non-BANKNIFTY only)
         # - Keep legacy BANKNIFTY logic unchanged above.
