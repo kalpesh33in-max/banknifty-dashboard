@@ -73,7 +73,9 @@ def get_value(label, text):
     return _normalize_cr(val_str, unit)
 
 def get_future_price(text, symbol):
-    pattern = rf"{re.escape(symbol)}\s*\(FUT:\s*([\d.]+)\)"
+    if not text:
+        return None
+    pattern = rf"(?<![A-Z0-9_]){re.escape(symbol)}\s*\(FUT:\s*([\d.]+)\)"
     match = re.search(pattern, text, re.IGNORECASE)
     return float(match.group(1)) if match else None
 
@@ -93,7 +95,6 @@ def parse_flow_metrics(section):
     if not section: return None
     opt_part = section.split("---- FUTURES FLOW ----")[0]
     c_itm, c_otm = get_writing_values("CALL_WR", opt_part)
-    if c_itm == 0: c_itm, c_otm = get_writing_values("CALL_SC", opt_part)
     p_itm, p_otm = get_writing_values("PUT_WR", opt_part)
     return {
         "bull_t": get_value("Bullish Turn", opt_part),
@@ -125,8 +126,8 @@ async def main():
         elif "5 MIN" in text.upper(): lbl, short_lbl = "5 MIN FLOW", "5MIN"
         else: return
 
-        # 1. FUTURES LOT MATCH (Indices)
-        for symbol in INDEX_SYMBOLS:
+        # 1. FUTURES LOT MATCH (All watched symbols)
+        for symbol in WATCH_SYMBOLS:
             section = extract_instrument_section(text, symbol)
             m = re.search(r"(FUT_BUY|FUT_SELL)\s*:\s*(\d+)\s+lots", section or "", re.IGNORECASE)
             if m and int(m.group(2)) >= FUT_LOT_THRESHOLD:
@@ -138,13 +139,14 @@ async def main():
                 other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
                 other = last_fut_signals[symbol].get(other_lbl)
                 if other and other["type"] == sig_fut and abs((now - other["time"]).total_seconds()) <= 30:
-                    price = get_future_price(text, symbol)
+                    price = get_future_price(section, symbol)
                     strike = get_atm(price, symbol) if price else "ATM"
+                    sl, tg = risk_points_for(symbol)
                     emoji = "🟢" if sig_fut == "CALL" else "🔴"
                     msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
                            f"**ACTION: BUY {symbol} {strike} {'CE' if sig_fut == 'CALL' else 'PE'}**\n"
                            f"**SIGNAL: {sig_fut} (FUT lots >= {FUT_LOT_THRESHOLD})**\n"
-                           f"🛡️ **SL: 30 pts | 🎯 TARGET: 60 pts**")
+                           f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
                     await safe_send(client, TARGET_BOT_ID, msg)
                     last_fut_signals[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
 
@@ -154,7 +156,7 @@ async def main():
             metrics = parse_flow_metrics(section)
             if not metrics: continue
             
-            price = get_future_price(text, symbol)
+            price = get_future_price(section, symbol)
             strike = get_atm(price, symbol) if price else "ATM"
             sl, tg = risk_points_for(symbol)
 
@@ -176,12 +178,12 @@ async def main():
 
             # Dual Match logic
             sig_type = None
-            if symbol == "BANKNIFTY":
+            if symbol in ("BANKNIFTY", "NIFTY"):
                 m_turn, m_itm = (10.0, 6.5) if short_lbl == "2MIN" else (2.0, 1.0)
                 if metrics["bull_t"] >= m_turn and metrics["put_itm"] >= m_itm and metrics["bear_t"] < 1.0: sig_type = "CALL"
                 elif metrics["bear_t"] >= m_turn and metrics["call_itm"] >= m_itm and metrics["bull_t"] < 1.0: sig_type = "PUT"
             else:
-                # Other Symbols (Nifty + Stocks)
+                # Other Symbols
                 if short_lbl == "2MIN":
                     if metrics["bull_t"] >= 6.0 and metrics["put_itm"] >= 3.5 and metrics["bear_t"] < 1.0: sig_type = "CALL"
                     elif metrics["bear_t"] >= 6.0 and metrics["call_itm"] >= 3.5 and metrics["bull_t"] < 1.0: sig_type = "PUT"
