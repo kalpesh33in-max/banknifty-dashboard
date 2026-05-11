@@ -33,6 +33,8 @@ STRIKE_STEPS = {
 }
 
 FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
+ITM_WRITER_THRESHOLD_CR = float(os.getenv("ITM_WRITER_THRESHOLD_CR", "12"))
+ITM_WRITER_CONFLICT_CR = float(os.getenv("ITM_WRITER_CONFLICT_CR", "10"))
 
 # State Tracking
 last_index_signals = {}
@@ -45,9 +47,44 @@ instant_itm_alerts = {}
 def parse_target_ref(value):
     if not value:
         raise RuntimeError("TARGET_BOT env var is not set")
+    value = value.strip()
+    value = re.sub(r"^https?://t\.me/", "", value, flags=re.IGNORECASE).strip("/")
     return int(value) if re.fullmatch(r"-?\d+", value) else value
 
 TARGET_BOT_REF = parse_target_ref(TARGET_BOT_RAW)
+
+def _entity_key(value):
+    return re.sub(r"[\s_@]+", "", str(value or "").lower())
+
+async def resolve_target_entity(client, target_ref):
+    candidates = [target_ref]
+    if isinstance(target_ref, str) and not target_ref.startswith("@"):
+        candidates.append(f"@{target_ref}")
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            return await client.get_entity(candidate)
+        except Exception as e:
+            last_error = e
+
+    target_key = _entity_key(target_ref)
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        entity_id = str(getattr(entity, "id", ""))
+        full_channel_id = f"-100{entity_id}" if entity_id and not entity_id.startswith("-") else entity_id
+        values = [
+            getattr(entity, "username", None),
+            getattr(entity, "title", None),
+            getattr(entity, "first_name", None),
+            dialog.name,
+            entity_id,
+            full_channel_id,
+        ]
+        if any(_entity_key(value) == target_key for value in values):
+            return entity
+
+    raise RuntimeError(f"Could not resolve TARGET_BOT={target_ref!r}. Last error: {last_error}")
 
 def get_atm(price, symbol):
     """Uses standard rounding to the nearest strike step for accuracy."""
@@ -121,12 +158,12 @@ async def main():
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
     try:
-        target_entity = await client.get_entity(TARGET_BOT_REF)
+        target_entity = await resolve_target_entity(client, TARGET_BOT_REF)
         print(f"✅ TARGET_BOT resolved: {getattr(target_entity, 'id', TARGET_BOT_REF)}", flush=True)
     except Exception as e:
         target_entity = TARGET_BOT_REF
         print(f"❌ TARGET_BOT resolve failed: {e}", flush=True)
-        print("Set TARGET_BOT to the target bot username, for example @YourTargetBot, or open/start that bot from this Telegram account.", flush=True)
+        print("Set TARGET_BOT to the exact @username, t.me link, numeric -100 channel ID, or exact dialog name visible to this Telegram account.", flush=True)
     print("🚀 SCANNER ACTIVE: Corrected Strike Steps for HDFCBANK (5), ICICI/RELIANCE (10)")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
@@ -173,11 +210,16 @@ async def main():
             strike = get_atm(price, symbol) if price else "ATM"
             sl, tg = risk_points_for(symbol)
 
-            # Instant 10Cr Alert (2MIN only)
+            # Instant ITM writer alert (2MIN only)
             if short_lbl == "2MIN":
                 alert_side = None
-                if metrics["put_itm"] >= 10.0: alert_side = "CALL"
-                elif metrics["call_itm"] >= 10.0: alert_side = "PUT"
+                both_sides_high = (
+                    metrics["put_itm"] >= ITM_WRITER_CONFLICT_CR
+                    and metrics["call_itm"] >= ITM_WRITER_CONFLICT_CR
+                )
+                if not both_sides_high:
+                    if metrics["put_itm"] >= ITM_WRITER_THRESHOLD_CR: alert_side = "CALL"
+                    elif metrics["call_itm"] >= ITM_WRITER_THRESHOLD_CR: alert_side = "PUT"
                 if alert_side:
                     akey = f"{symbol}_{alert_side}_{now.strftime('%H:%M')}"
                     if akey not in instant_itm_alerts:
@@ -185,7 +227,7 @@ async def main():
                         emoji = "🟢" if alert_side == "CALL" else "🔴"
                         msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
                                f"**ACTION: BUY {symbol} {strike} {'CE' if alert_side == 'CALL' else 'PE'}**\n"
-                               f"**SIGNAL: {alert_side} (2MIN ITM WRITER >= 10Cr)**\n"
+                               f"**SIGNAL: {alert_side} (2MIN ITM WRITER >= {ITM_WRITER_THRESHOLD_CR:g}Cr)**\n"
                                f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
                         await safe_send(client, target_entity, msg)
 
