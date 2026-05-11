@@ -5,7 +5,6 @@ import datetime
 import pytz
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.tl.types import PeerUser
 
 # ---------------- CONFIG ---------------- #
 API_ID = int(os.getenv("TG_API_ID"))
@@ -13,7 +12,7 @@ API_HASH = os.getenv("TG_API_HASH")
 SESSION_STR = os.getenv("TG_SESSION_STR")
 
 SOURCE_IDS = [int(i.strip()) for i in os.getenv("SOURCE_BOT").split(",")]
-TARGET_BOT_ID = int(os.getenv("TARGET_BOT")) 
+TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -42,6 +41,13 @@ last_signals_by_symbol = {}
 instant_itm_alerts = {}
 
 # ---------------- UTILITY FUNCTIONS ---------------- #
+
+def parse_target_ref(value):
+    if not value:
+        raise RuntimeError("TARGET_BOT env var is not set")
+    return int(value) if re.fullmatch(r"-?\d+", value) else value
+
+TARGET_BOT_REF = parse_target_ref(TARGET_BOT_RAW)
 
 def get_atm(price, symbol):
     """Uses standard rounding to the nearest strike step for accuracy."""
@@ -114,6 +120,13 @@ async def safe_send(client, target_id, message):
 async def main():
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
+    try:
+        target_entity = await client.get_entity(TARGET_BOT_REF)
+        print(f"✅ TARGET_BOT resolved: {getattr(target_entity, 'id', TARGET_BOT_REF)}", flush=True)
+    except Exception as e:
+        target_entity = TARGET_BOT_REF
+        print(f"❌ TARGET_BOT resolve failed: {e}", flush=True)
+        print("Set TARGET_BOT to the target bot username, for example @YourTargetBot, or open/start that bot from this Telegram account.", flush=True)
     print("🚀 SCANNER ACTIVE: Corrected Strike Steps for HDFCBANK (5), ICICI/RELIANCE (10)")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
@@ -147,7 +160,7 @@ async def main():
                            f"**ACTION: BUY {symbol} {strike} {'CE' if sig_fut == 'CALL' else 'PE'}**\n"
                            f"**SIGNAL: {sig_fut} (FUT lots >= {FUT_LOT_THRESHOLD})**\n"
                            f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                    await safe_send(client, TARGET_BOT_ID, msg)
+                    await safe_send(client, target_entity, msg)
                     last_fut_signals[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
 
         # 2. FLOW & DUAL MATCH (All Symbols)
@@ -174,7 +187,7 @@ async def main():
                                f"**ACTION: BUY {symbol} {strike} {'CE' if alert_side == 'CALL' else 'PE'}**\n"
                                f"**SIGNAL: {alert_side} (2MIN ITM WRITER >= 10Cr)**\n"
                                f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                        await safe_send(client, TARGET_BOT_ID, msg)
+                        await safe_send(client, target_entity, msg)
 
             # Dual Match logic
             sig_type = None
@@ -204,7 +217,7 @@ async def main():
                            f"**ACTION: BUY {symbol} {strike} {'CE' if sig_type == 'CALL' else 'PE'}**\n"
                            f"**SIGNAL: {sig_type} (Matched in {abs((now-other['time']).total_seconds()):.1f}s)**\n"
                            f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                    await safe_send(client, TARGET_BOT_ID, msg)
+                    await safe_send(client, target_entity, msg)
                     last_signals_by_symbol[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
 
     await client.run_until_disconnected()
