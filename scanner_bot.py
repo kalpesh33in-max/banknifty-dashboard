@@ -16,6 +16,9 @@ TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
 
 IST = pytz.timezone("Asia/Kolkata")
 
+def env_bool(name, default="false"):
+    return str(os.getenv(name, default)).strip().lower() in ("1", "true", "yes", "on")
+
 # ---------------- INSTRUMENT SPECS ---------------- #
 INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY"]
 STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
@@ -35,6 +38,7 @@ STRIKE_STEPS = {
 FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
 ITM_WRITER_THRESHOLD_CR = float(os.getenv("ITM_WRITER_THRESHOLD_CR", "11"))
 ITM_WRITER_CONFLICT_CR = float(os.getenv("ITM_WRITER_CONFLICT_CR", "10"))
+ENABLE_MATCHED_IN_ALERTS = env_bool("ENABLE_MATCHED_IN_ALERTS", "false")
 
 # State Tracking
 last_index_signals = {}
@@ -276,12 +280,13 @@ async def main():
                 other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
                 other = last_signals_by_symbol[symbol].get(other_lbl)
                 if other and other["type"] == sig_type and abs((now - other["time"]).total_seconds()) <= 30:
-                    emoji = "🟢" if sig_type == "CALL" else "🔴"
-                    msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                           f"**ACTION: BUY {symbol} {strike} {'CE' if sig_type == 'CALL' else 'PE'}**\n"
-                           f"**SIGNAL: {sig_type} (Matched in {abs((now-other['time']).total_seconds()):.1f}s)**\n"
-                           f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                    await safe_send(client, target_entity, msg)
+                    if ENABLE_MATCHED_IN_ALERTS:
+                        emoji = "🟢" if sig_type == "CALL" else "🔴"
+                        msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+                               f"**ACTION: BUY {symbol} {strike} {'CE' if sig_type == 'CALL' else 'PE'}**\n"
+                               f"**SIGNAL: {sig_type} (Matched in {abs((now-other['time']).total_seconds()):.1f}s)**\n"
+                               f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
+                        await safe_send(client, target_entity, msg)
                     last_signals_by_symbol[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
 
     await client.run_until_disconnected()
