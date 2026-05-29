@@ -37,8 +37,13 @@ STRIKE_STEPS = {
 
 FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
 ITM_WRITER_THRESHOLD_CR = float(os.getenv("ITM_WRITER_THRESHOLD_CR", "11"))
+ITM_SC_THRESHOLD_CR = float(os.getenv("ITM_SC_THRESHOLD_CR", "20"))
 ITM_WRITER_CONFLICT_CR = float(os.getenv("ITM_WRITER_CONFLICT_CR", "10"))
 ENABLE_MATCHED_IN_ALERTS = env_bool("ENABLE_MATCHED_IN_ALERTS", "false")
+ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS = env_bool(
+    "ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS",
+    "false",
+)
 
 # State Tracking
 last_index_signals = {}
@@ -223,27 +228,28 @@ async def main():
                 bullish_triggers = []
                 bearish_triggers = []
                 if metrics["put_itm"] >= ITM_WRITER_THRESHOLD_CR:
-                    bullish_triggers.append(("PUT_WR", metrics["put_itm"]))
-                if metrics["call_sc_itm"] >= ITM_WRITER_THRESHOLD_CR:
-                    bullish_triggers.append(("CALL_SC", metrics["call_sc_itm"]))
+                    bullish_triggers.append(("PUT_WR", metrics["put_itm"], ITM_WRITER_THRESHOLD_CR))
+                if metrics["call_sc_itm"] >= ITM_SC_THRESHOLD_CR:
+                    bullish_triggers.append(("CALL_SC", metrics["call_sc_itm"], ITM_SC_THRESHOLD_CR))
                 if metrics["call_itm"] >= ITM_WRITER_THRESHOLD_CR:
-                    bearish_triggers.append(("CALL_WR", metrics["call_itm"]))
-                if metrics["put_sc_itm"] >= ITM_WRITER_THRESHOLD_CR:
-                    bearish_triggers.append(("PUT_SC", metrics["put_sc_itm"]))
+                    bearish_triggers.append(("CALL_WR", metrics["call_itm"], ITM_WRITER_THRESHOLD_CR))
+                if metrics["put_sc_itm"] >= ITM_SC_THRESHOLD_CR:
+                    bearish_triggers.append(("PUT_SC", metrics["put_sc_itm"], ITM_SC_THRESHOLD_CR))
 
                 alert_side = None
                 trigger_label = None
                 trigger_value = 0.0
+                trigger_threshold = ITM_WRITER_THRESHOLD_CR
                 conflict = (
-                    any(value >= ITM_WRITER_CONFLICT_CR for _, value in bullish_triggers)
-                    and any(value >= ITM_WRITER_CONFLICT_CR for _, value in bearish_triggers)
+                    bool(bullish_triggers)
+                    and bool(bearish_triggers)
                 )
                 if not conflict:
                     if bullish_triggers:
-                        trigger_label, trigger_value = max(bullish_triggers, key=lambda item: item[1])
+                        trigger_label, trigger_value, trigger_threshold = max(bullish_triggers, key=lambda item: item[1])
                         alert_side = "CALL"
                     elif bearish_triggers:
-                        trigger_label, trigger_value = max(bearish_triggers, key=lambda item: item[1])
+                        trigger_label, trigger_value, trigger_threshold = max(bearish_triggers, key=lambda item: item[1])
                         alert_side = "PUT"
 
                 if alert_side:
@@ -253,7 +259,7 @@ async def main():
                         emoji = "🟢" if alert_side == "CALL" else "🔴"
                         msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
                                f"**ACTION: BUY {symbol} {strike} {'CE' if alert_side == 'CALL' else 'PE'}**\n"
-                               f"**SIGNAL: {alert_side} (2MIN ITM {trigger_label} {trigger_value:.2f}Cr >= {ITM_WRITER_THRESHOLD_CR:g}Cr)**\n"
+                               f"**SIGNAL: {alert_side} (2MIN ITM {trigger_label} {trigger_value:.2f}Cr >= {trigger_threshold:g}Cr)**\n"
                                f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
                         await safe_send(client, target_entity, msg)
 
@@ -280,7 +286,7 @@ async def main():
                 other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
                 other = last_signals_by_symbol[symbol].get(other_lbl)
                 if other and other["type"] == sig_type and abs((now - other["time"]).total_seconds()) <= 30:
-                    if ENABLE_MATCHED_IN_ALERTS:
+                    if ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS and ENABLE_MATCHED_IN_ALERTS:
                         emoji = "🟢" if sig_type == "CALL" else "🔴"
                         msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
                                f"**ACTION: BUY {symbol} {strike} {'CE' if sig_type == 'CALL' else 'PE'}**\n"
