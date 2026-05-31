@@ -39,10 +39,10 @@ FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
 ITM_WRITER_THRESHOLD_CR = float(os.getenv("ITM_WRITER_THRESHOLD_CR", "11"))
 ITM_SC_THRESHOLD_CR = float(os.getenv("ITM_SC_THRESHOLD_CR", "20"))
 ITM_WRITER_CONFLICT_CR = float(os.getenv("ITM_WRITER_CONFLICT_CR", "10"))
-ENABLE_MATCHED_IN_ALERTS = env_bool("ENABLE_MATCHED_IN_ALERTS", "false")
+ENABLE_MATCHED_IN_ALERTS = env_bool("ENABLE_MATCHED_IN_ALERTS", "true")
 ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS = env_bool(
     "ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS",
-    "false",
+    "true",
 )
 
 # State Tracking
@@ -189,29 +189,23 @@ async def main():
         elif "5 MIN" in text.upper(): lbl, short_lbl = "5 MIN FLOW", "5MIN"
         else: return
 
-        # 1. FUTURES LOT MATCH (All watched symbols)
+        # 1. FUTURES LOT MATCH (2MIN only, no 5MIN confirmation)
         for symbol in WATCH_SYMBOLS:
+            if short_lbl != "2MIN":
+                continue
             section = extract_instrument_section(text, symbol)
             m = re.search(r"(FUT_BUY|FUT_SELL)\s*:\s*(\d+)\s+lots", section or "", re.IGNORECASE)
             if m and int(m.group(2)) >= FUT_LOT_THRESHOLD:
                 sig_fut = "CALL" if m.group(1).upper() == "FUT_BUY" else "PUT"
-                if symbol not in last_fut_signals:
-                    last_fut_signals[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
-                last_fut_signals[symbol][lbl] = {"type": sig_fut, "time": now}
-                
-                other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
-                other = last_fut_signals[symbol].get(other_lbl)
-                if other and other["type"] == sig_fut and abs((now - other["time"]).total_seconds()) <= 30:
-                    price = get_future_price(section, symbol)
-                    strike = get_atm(price, symbol) if price else "ATM"
-                    sl, tg = risk_points_for(symbol)
-                    emoji = "🟢" if sig_fut == "CALL" else "🔴"
-                    msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                           f"**ACTION: BUY {symbol} {strike} {'CE' if sig_fut == 'CALL' else 'PE'}**\n"
-                           f"**SIGNAL: {sig_fut} (FUT lots >= {FUT_LOT_THRESHOLD})**\n"
-                           f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                    await safe_send(client, target_entity, msg)
-                    last_fut_signals[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
+                price = get_future_price(section, symbol)
+                strike = get_atm(price, symbol) if price else "ATM"
+                sl, tg = risk_points_for(symbol)
+                emoji = "🟢" if sig_fut == "CALL" else "🔴"
+                msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+                       f"**ACTION: BUY {symbol} {strike} {'CE' if sig_fut == 'CALL' else 'PE'}**\n"
+                       f"**SIGNAL: {sig_fut} (2MIN FUT lots >= {FUT_LOT_THRESHOLD})**\n"
+                       f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
+                await safe_send(client, target_entity, msg)
 
         # 2. FLOW & DUAL MATCH (All Symbols)
         for symbol in WATCH_SYMBOLS:
