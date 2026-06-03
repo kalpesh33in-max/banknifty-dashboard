@@ -35,10 +35,23 @@ STRIKE_STEPS = {
     "RELIANCE": 10,  # Updated to 10
 }
 
-FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "2000"))
+FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "3000"))
 ITM_WRITER_THRESHOLD_CR = float(os.getenv("ITM_WRITER_THRESHOLD_CR", "11"))
 ITM_SC_THRESHOLD_CR = float(os.getenv("ITM_SC_THRESHOLD_CR", "20"))
 ITM_WRITER_CONFLICT_CR = float(os.getenv("ITM_WRITER_CONFLICT_CR", "10"))
+SC_BOTH_SIDE_LEG_THRESHOLD_CR = float(os.getenv("SC_BOTH_SIDE_LEG_THRESHOLD_CR", "10"))
+SC_BOTH_SIDE_TOTAL_THRESHOLD_CR = float(os.getenv("SC_BOTH_SIDE_TOTAL_THRESHOLD_CR", "20"))
+BANKNIFTY_OTM_WR_2MIN_TURN_CR = float(os.getenv("BANKNIFTY_OTM_WR_2MIN_TURN_CR", "10"))
+BANKNIFTY_OTM_WR_2MIN_WRITER_CR = float(os.getenv("BANKNIFTY_OTM_WR_2MIN_WRITER_CR", "10"))
+BANKNIFTY_OTM_WR_5MIN_TURN_CR = float(os.getenv("BANKNIFTY_OTM_WR_5MIN_TURN_CR", "2"))
+BANKNIFTY_OTM_WR_5MIN_WRITER_CR = float(os.getenv("BANKNIFTY_OTM_WR_5MIN_WRITER_CR", "2"))
+REVERSE_CONFIRM_TURN_CR = float(os.getenv("REVERSE_CONFIRM_TURN_CR", "5"))
+REVERSE_CONFIRM_OPPOSITE_MAX_CR = float(os.getenv("REVERSE_CONFIRM_OPPOSITE_MAX_CR", "2"))
+REVERSE_LATE_START = os.getenv("REVERSE_LATE_START", "14:45")
+REVERSE_LATE_CONFIRMATIONS = int(os.getenv("REVERSE_LATE_CONFIRMATIONS", "2"))
+REVERSE_VERY_STRONG_TURN_CR = float(os.getenv("REVERSE_VERY_STRONG_TURN_CR", "10"))
+REVERSE_VERY_STRONG_OPPOSITE_MAX_CR = float(os.getenv("REVERSE_VERY_STRONG_OPPOSITE_MAX_CR", "1"))
+ACTIVE_SIGNAL_MAX_AGE_MIN = int(os.getenv("ACTIVE_SIGNAL_MAX_AGE_MIN", "90"))
 ENABLE_MATCHED_IN_ALERTS = env_bool("ENABLE_MATCHED_IN_ALERTS", "true")
 ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS = env_bool(
     "ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS",
@@ -49,6 +62,9 @@ ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS = env_bool(
 last_index_signals = {}
 last_fut_signals = {}
 last_signals_by_symbol = {}
+last_otm_signals_by_symbol = {}
+active_signals_by_symbol = {}
+pending_reverses_by_symbol = {}
 instant_itm_alerts = {}
 
 # ---------------- UTILITY FUNCTIONS ---------------- #
@@ -129,6 +145,11 @@ def get_value(label, text):
     val_str, unit = matches[-1]
     return _normalize_cr(val_str, unit)
 
+def get_bias(label, text):
+    pattern = rf"{label}\s*:\s*([^\r\n]+)"
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    return matches[-1].strip() if matches else ""
+
 def get_future_price(text, symbol):
     if not text:
         return None
@@ -150,14 +171,20 @@ def extract_instrument_section(text, symbol):
 
 def parse_flow_metrics(section):
     if not section: return None
-    opt_part = section.split("---- FUTURES FLOW ----")[0]
+    parts = section.split("---- FUTURES FLOW ----", 1)
+    opt_part = parts[0]
+    fut_part = parts[1] if len(parts) > 1 else ""
     c_itm, c_otm = get_writing_values("CALL_WR", opt_part)
     p_itm, p_otm = get_writing_values("PUT_WR", opt_part)
     cs_itm, cs_otm = get_writing_values("CALL_SC", opt_part)
     ps_itm, ps_otm = get_writing_values("PUT_SC", opt_part)
     return {
+        "option_bias": get_bias("Option Bias", opt_part),
         "bull_t": get_value("Bullish Turn", opt_part),
         "bear_t": get_value("Bearish Turn", opt_part),
+        "future_bias": get_bias("Future Bias", fut_part),
+        "future_bull_t": get_value("Bullish Turn", fut_part),
+        "future_bear_t": get_value("Bearish Turn", fut_part),
         "call_itm": c_itm, "call_otm": c_otm,
         "put_itm": p_itm, "put_otm": p_otm,
         "call_sc_itm": cs_itm, "call_sc_otm": cs_otm,
@@ -169,6 +196,166 @@ async def safe_send(client, target_id, message):
         await client.send_message(target_id, message)
     except Exception as e:
         print(f"❌ Delivery Error: {e}")
+
+def option_type_for_side(side):
+    return "CE" if side == "CALL" else "PE"
+
+def emoji_for_side(side):
+    return "🟢" if side == "CALL" else "🔴"
+
+def hhmm_time(value):
+    return datetime.datetime.strptime(value, "%H:%M").time()
+
+def is_late_reverse_window(now):
+    return now.time() >= hhmm_time(REVERSE_LATE_START)
+
+def is_strong_option_bias(metrics, side):
+    bias = str(metrics.get("option_bias", "")).upper()
+    need = "BULLISH" if side == "CALL" else "BEARISH"
+    return need in bias and "MILD" not in bias and "STRONG" in bias
+
+def is_strong_opposite_future(metrics, side):
+    bias = str(metrics.get("future_bias", "")).upper()
+    if not bias or "MILD" in bias:
+        return False
+    if side == "CALL":
+        return "BEARISH" in bias and "STRONG" in bias
+    return "BULLISH" in bias and "STRONG" in bias
+
+def reverse_flow_confirmed(metrics, side):
+    if not is_strong_option_bias(metrics, side):
+        return False
+    if is_strong_opposite_future(metrics, side):
+        return False
+    if side == "CALL":
+        return (
+            metrics["bull_t"] >= REVERSE_CONFIRM_TURN_CR
+            and metrics["bear_t"] <= REVERSE_CONFIRM_OPPOSITE_MAX_CR
+        )
+    return (
+        metrics["bear_t"] >= REVERSE_CONFIRM_TURN_CR
+        and metrics["bull_t"] <= REVERSE_CONFIRM_OPPOSITE_MAX_CR
+    )
+
+def reverse_flow_very_strong(metrics, side):
+    bias = str(metrics.get("option_bias", "")).upper()
+    if "VERY STRONG" not in bias:
+        return False
+    if is_strong_opposite_future(metrics, side):
+        return False
+    if side == "CALL":
+        return (
+            metrics["bull_t"] >= REVERSE_VERY_STRONG_TURN_CR
+            and metrics["bear_t"] <= REVERSE_VERY_STRONG_OPPOSITE_MAX_CR
+        )
+    return (
+        metrics["bear_t"] >= REVERSE_VERY_STRONG_TURN_CR
+        and metrics["bull_t"] <= REVERSE_VERY_STRONG_OPPOSITE_MAX_CR
+    )
+
+def build_buy_alert(symbol, strike, side, reason, sl, tg):
+    emoji = emoji_for_side(side)
+    return (
+        f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
+        f"**ACTION: BUY {symbol} {strike} {option_type_for_side(side)}**\n"
+        f"**SIGNAL: {side} ({reason})**\n"
+        f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**"
+    )
+
+def active_signal_for(symbol, now):
+    active = active_signals_by_symbol.get(symbol)
+    if not active:
+        return None
+    if now - active["time"] > datetime.timedelta(minutes=ACTIVE_SIGNAL_MAX_AGE_MIN):
+        active_signals_by_symbol.pop(symbol, None)
+        return None
+    return active
+
+async def handle_candidate_signal(client, target_id, symbol, strike, side, reason, sl, tg, now, created_pending_symbols, reverse_confirmed=False):
+    if not reverse_confirmed and symbol in pending_reverses_by_symbol:
+        return False
+
+    active = active_signal_for(symbol, now)
+    if not reverse_confirmed and active and active["side"] != side:
+        pending_reverses_by_symbol[symbol] = {
+            "side": side,
+            "strike": strike,
+            "reason": reason,
+            "sl": sl,
+            "tg": tg,
+            "time": now,
+            "confirmations": 0,
+        }
+        created_pending_symbols.add(symbol)
+        active_signals_by_symbol.pop(symbol, None)
+
+        msg = (
+            "⚠️ **REVERSE EXIT ONLY**\n\n"
+            f"**ACTION: EXIT {symbol}**\n"
+            f"OLD: {symbol} {active['strike']} {option_type_for_side(active['side'])}\n"
+            f"PENDING: BUY {symbol} {strike} {option_type_for_side(side)}\n"
+            "WAIT: NEXT 2MIN CONFIRMATION"
+        )
+        await safe_send(client, target_id, msg)
+        return False
+
+    await safe_send(
+        client,
+        target_id,
+        build_buy_alert(symbol, strike, side, reason, sl, tg),
+    )
+    active_signals_by_symbol[symbol] = {
+        "side": side,
+        "strike": strike,
+        "time": now,
+        "reverse": reverse_confirmed,
+    }
+    return True
+
+async def process_pending_reverse(client, target_id, symbol, metrics, now, created_pending_symbols):
+    if symbol in created_pending_symbols:
+        return
+
+    pending = pending_reverses_by_symbol.get(symbol)
+    if not pending:
+        return
+
+    side = pending["side"]
+    confirmed = reverse_flow_confirmed(metrics, side)
+    very_strong = reverse_flow_very_strong(metrics, side)
+
+    if not confirmed:
+        msg = (
+            "🚫 **REVERSE CANCELLED**\n\n"
+            f"PENDING: BUY {symbol} {pending['strike']} {option_type_for_side(side)}\n"
+            "REASON: NEXT 2MIN FLOW NOT CONFIRMED"
+        )
+        await safe_send(client, target_id, msg)
+        pending_reverses_by_symbol.pop(symbol, None)
+        return
+
+    if is_late_reverse_window(now) and not very_strong:
+        pending["confirmations"] += 1
+        if pending["confirmations"] < REVERSE_LATE_CONFIRMATIONS:
+            return
+        reason = f"REVERSE CONFIRMED {REVERSE_LATE_CONFIRMATIONS}X AFTER {REVERSE_LATE_START}"
+    else:
+        reason = "REVERSE CONFIRMED NEXT 2MIN"
+
+    pending_reverses_by_symbol.pop(symbol, None)
+    await handle_candidate_signal(
+        client,
+        target_id,
+        symbol,
+        pending["strike"],
+        side,
+        reason,
+        pending["sl"],
+        pending["tg"],
+        now,
+        created_pending_symbols,
+        reverse_confirmed=True,
+    )
 
 # ---------------- MAIN HANDLER ---------------- #
 
@@ -194,6 +381,8 @@ async def main():
         elif "5 MIN" in text.upper(): lbl, short_lbl = "5 MIN FLOW", "5MIN"
         else: return
 
+        created_pending_symbols = set()
+
         # 1. FUTURES LOT MATCH (2MIN only, no 5MIN confirmation)
         for symbol in WATCH_SYMBOLS:
             if short_lbl != "2MIN":
@@ -205,18 +394,34 @@ async def main():
                 price = get_future_price(section, symbol)
                 strike = get_atm(price, symbol) if price else "ATM"
                 sl, tg = risk_points_for(symbol)
-                emoji = "🟢" if sig_fut == "CALL" else "🔴"
-                msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                       f"**ACTION: BUY {symbol} {strike} {'CE' if sig_fut == 'CALL' else 'PE'}**\n"
-                       f"**SIGNAL: {sig_fut} (2MIN FUT lots >= {FUT_LOT_THRESHOLD})**\n"
-                       f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                await safe_send(client, target_entity, msg)
+                await handle_candidate_signal(
+                    client,
+                    target_entity,
+                    symbol,
+                    strike,
+                    sig_fut,
+                    f"2MIN FUT lots >= {FUT_LOT_THRESHOLD}",
+                    sl,
+                    tg,
+                    now,
+                    created_pending_symbols,
+                )
 
         # 2. FLOW & DUAL MATCH (All Symbols)
         for symbol in WATCH_SYMBOLS:
             section = extract_instrument_section(text, symbol)
             metrics = parse_flow_metrics(section)
             if not metrics: continue
+
+            if short_lbl == "2MIN":
+                await process_pending_reverse(
+                    client,
+                    target_entity,
+                    symbol,
+                    metrics,
+                    now,
+                    created_pending_symbols,
+                )
             
             price = get_future_price(section, symbol)
             strike = get_atm(price, symbol) if price else "ATM"
@@ -227,13 +432,68 @@ async def main():
                 bullish_triggers = []
                 bearish_triggers = []
                 if metrics["put_itm"] >= ITM_WRITER_THRESHOLD_CR:
-                    bullish_triggers.append(("PUT_WR", metrics["put_itm"], ITM_WRITER_THRESHOLD_CR))
+                    bullish_triggers.append((
+                        "PUT_WR",
+                        metrics["put_itm"],
+                        ITM_WRITER_THRESHOLD_CR,
+                        f"2MIN ITM PUT_WR {metrics['put_itm']:.2f}Cr >= {ITM_WRITER_THRESHOLD_CR:g}Cr",
+                    ))
                 if metrics["call_sc_itm"] >= ITM_SC_THRESHOLD_CR:
-                    bullish_triggers.append(("CALL_SC", metrics["call_sc_itm"], ITM_SC_THRESHOLD_CR))
+                    bullish_triggers.append((
+                        "CALL_SC",
+                        metrics["call_sc_itm"],
+                        ITM_SC_THRESHOLD_CR,
+                        f"2MIN ITM CALL_SC {metrics['call_sc_itm']:.2f}Cr >= {ITM_SC_THRESHOLD_CR:g}Cr",
+                    ))
                 if metrics["call_itm"] >= ITM_WRITER_THRESHOLD_CR:
-                    bearish_triggers.append(("CALL_WR", metrics["call_itm"], ITM_WRITER_THRESHOLD_CR))
+                    bearish_triggers.append((
+                        "CALL_WR",
+                        metrics["call_itm"],
+                        ITM_WRITER_THRESHOLD_CR,
+                        f"2MIN ITM CALL_WR {metrics['call_itm']:.2f}Cr >= {ITM_WRITER_THRESHOLD_CR:g}Cr",
+                    ))
                 if metrics["put_sc_itm"] >= ITM_SC_THRESHOLD_CR:
-                    bearish_triggers.append(("PUT_SC", metrics["put_sc_itm"], ITM_SC_THRESHOLD_CR))
+                    bearish_triggers.append((
+                        "PUT_SC",
+                        metrics["put_sc_itm"],
+                        ITM_SC_THRESHOLD_CR,
+                        f"2MIN ITM PUT_SC {metrics['put_sc_itm']:.2f}Cr >= {ITM_SC_THRESHOLD_CR:g}Cr",
+                    ))
+
+                call_sc_total = metrics["call_sc_itm"] + metrics["call_sc_otm"]
+                put_sc_total = metrics["put_sc_itm"] + metrics["put_sc_otm"]
+
+                if (
+                    metrics["call_sc_itm"] >= SC_BOTH_SIDE_LEG_THRESHOLD_CR
+                    and metrics["call_sc_otm"] >= SC_BOTH_SIDE_LEG_THRESHOLD_CR
+                    and call_sc_total >= SC_BOTH_SIDE_TOTAL_THRESHOLD_CR
+                ):
+                    bullish_triggers.append((
+                        "CALL_SC_TOT",
+                        call_sc_total,
+                        SC_BOTH_SIDE_TOTAL_THRESHOLD_CR,
+                        (
+                            f"2MIN CALL_SC TOT {call_sc_total:.2f}Cr >= "
+                            f"{SC_BOTH_SIDE_TOTAL_THRESHOLD_CR:g}Cr, "
+                            f"ITM/OTM >= {SC_BOTH_SIDE_LEG_THRESHOLD_CR:g}Cr"
+                        ),
+                    ))
+
+                if (
+                    metrics["put_sc_itm"] >= SC_BOTH_SIDE_LEG_THRESHOLD_CR
+                    and metrics["put_sc_otm"] >= SC_BOTH_SIDE_LEG_THRESHOLD_CR
+                    and put_sc_total >= SC_BOTH_SIDE_TOTAL_THRESHOLD_CR
+                ):
+                    bearish_triggers.append((
+                        "PUT_SC_TOT",
+                        put_sc_total,
+                        SC_BOTH_SIDE_TOTAL_THRESHOLD_CR,
+                        (
+                            f"2MIN PUT_SC TOT {put_sc_total:.2f}Cr >= "
+                            f"{SC_BOTH_SIDE_TOTAL_THRESHOLD_CR:g}Cr, "
+                            f"ITM/OTM >= {SC_BOTH_SIDE_LEG_THRESHOLD_CR:g}Cr"
+                        ),
+                    ))
 
                 alert_side = None
                 trigger_label = None
@@ -245,22 +505,28 @@ async def main():
                 )
                 if not conflict:
                     if bullish_triggers:
-                        trigger_label, trigger_value, trigger_threshold = max(bullish_triggers, key=lambda item: item[1])
+                        trigger_label, trigger_value, trigger_threshold, trigger_reason = max(bullish_triggers, key=lambda item: item[1])
                         alert_side = "CALL"
                     elif bearish_triggers:
-                        trigger_label, trigger_value, trigger_threshold = max(bearish_triggers, key=lambda item: item[1])
+                        trigger_label, trigger_value, trigger_threshold, trigger_reason = max(bearish_triggers, key=lambda item: item[1])
                         alert_side = "PUT"
 
                 if alert_side:
                     akey = f"{symbol}_{alert_side}_{trigger_label}_{now.strftime('%H:%M')}"
                     if akey not in instant_itm_alerts:
                         instant_itm_alerts[akey] = now
-                        emoji = "🟢" if alert_side == "CALL" else "🔴"
-                        msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                               f"**ACTION: BUY {symbol} {strike} {'CE' if alert_side == 'CALL' else 'PE'}**\n"
-                               f"**SIGNAL: {alert_side} (2MIN ITM {trigger_label} {trigger_value:.2f}Cr >= {trigger_threshold:g}Cr)**\n"
-                               f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                        await safe_send(client, target_entity, msg)
+                        await handle_candidate_signal(
+                            client,
+                            target_entity,
+                            symbol,
+                            strike,
+                            alert_side,
+                            trigger_reason,
+                            sl,
+                            tg,
+                            now,
+                            created_pending_symbols,
+                        )
 
             # Dual Match logic
             sig_type = None
@@ -286,13 +552,72 @@ async def main():
                 other = last_signals_by_symbol[symbol].get(other_lbl)
                 if other and other["type"] == sig_type and abs((now - other["time"]).total_seconds()) <= 30:
                     if ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS and ENABLE_MATCHED_IN_ALERTS:
-                        emoji = "🟢" if sig_type == "CALL" else "🔴"
-                        msg = (f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-                               f"**ACTION: BUY {symbol} {strike} {'CE' if sig_type == 'CALL' else 'PE'}**\n"
-                               f"**SIGNAL: {sig_type} (Matched in {abs((now-other['time']).total_seconds()):.1f}s)**\n"
-                               f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**")
-                        await safe_send(client, target_entity, msg)
+                        await handle_candidate_signal(
+                            client,
+                            target_entity,
+                            symbol,
+                            strike,
+                            sig_type,
+                            f"Matched in {abs((now-other['time']).total_seconds()):.1f}s",
+                            sl,
+                            tg,
+                            now,
+                            created_pending_symbols,
+                        )
                     last_signals_by_symbol[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
+
+            # BANKNIFTY OTM writer 2MIN + 5MIN matched logic
+            otm_sig_type = None
+            if symbol == "BANKNIFTY":
+                if short_lbl == "2MIN":
+                    if (
+                        metrics["bull_t"] >= BANKNIFTY_OTM_WR_2MIN_TURN_CR
+                        and metrics["put_otm"] >= BANKNIFTY_OTM_WR_2MIN_WRITER_CR
+                        and metrics["bear_t"] < 1.0
+                    ):
+                        otm_sig_type = "CALL"
+                    elif (
+                        metrics["bear_t"] >= BANKNIFTY_OTM_WR_2MIN_TURN_CR
+                        and metrics["call_otm"] >= BANKNIFTY_OTM_WR_2MIN_WRITER_CR
+                        and metrics["bull_t"] < 1.0
+                    ):
+                        otm_sig_type = "PUT"
+                else:
+                    if (
+                        metrics["bull_t"] >= BANKNIFTY_OTM_WR_5MIN_TURN_CR
+                        and metrics["put_otm"] >= BANKNIFTY_OTM_WR_5MIN_WRITER_CR
+                        and metrics["bear_t"] < 1.0
+                    ):
+                        otm_sig_type = "CALL"
+                    elif (
+                        metrics["bear_t"] >= BANKNIFTY_OTM_WR_5MIN_TURN_CR
+                        and metrics["call_otm"] >= BANKNIFTY_OTM_WR_5MIN_WRITER_CR
+                        and metrics["bull_t"] < 1.0
+                    ):
+                        otm_sig_type = "PUT"
+
+            if otm_sig_type:
+                if symbol not in last_otm_signals_by_symbol:
+                    last_otm_signals_by_symbol[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
+                last_otm_signals_by_symbol[symbol][lbl] = {"type": otm_sig_type, "time": now}
+
+                other_lbl = "5 MIN FLOW" if short_lbl == "2MIN" else "2 MIN FLOW"
+                other = last_otm_signals_by_symbol[symbol].get(other_lbl)
+                if other and other["type"] == otm_sig_type and abs((now - other["time"]).total_seconds()) <= 30:
+                    if ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS and ENABLE_MATCHED_IN_ALERTS:
+                        await handle_candidate_signal(
+                            client,
+                            target_entity,
+                            symbol,
+                            strike,
+                            otm_sig_type,
+                            f"OTM_WR Matched in {abs((now-other['time']).total_seconds()):.1f}s",
+                            sl,
+                            tg,
+                            now,
+                            created_pending_symbols,
+                        )
+                    last_otm_signals_by_symbol[symbol] = {"2 MIN FLOW": None, "5 MIN FLOW": None}
 
     await client.run_until_disconnected()
 
