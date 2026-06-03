@@ -104,6 +104,11 @@ def risk_points_for(symbol):
     """Returns (SL, Target) based on instrument type."""
     return (3, 6) if symbol.upper() in STOCK_SYMBOLS else (30, 60)
 
+def get_dual_match_thresholds(symbol, short_lbl, now):
+    if symbol == "BANKNIFTY" and 1 <= now.day <= 10:
+        return (5.0, 5.0) if short_lbl == "2MIN" else (1.0, 1.0)
+    return (10.0, 6.5) if short_lbl == "2MIN" else (2.0, 1.0)
+
 def _normalize_cr(value, unit):
     try:
         val = float(value)
@@ -260,7 +265,7 @@ async def main():
             # Dual Match logic
             sig_type = None
             if symbol in ("BANKNIFTY", "NIFTY"):
-                m_turn, m_itm = (10.0, 6.5) if short_lbl == "2MIN" else (2.0, 1.0)
+                m_turn, m_itm = get_dual_match_thresholds(symbol, short_lbl, now)
                 if metrics["bull_t"] >= m_turn and metrics["put_itm"] >= m_itm and metrics["bear_t"] < 1.0: sig_type = "CALL"
                 elif metrics["bear_t"] >= m_turn and metrics["call_itm"] >= m_itm and metrics["bull_t"] < 1.0: sig_type = "PUT"
             else:
