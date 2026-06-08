@@ -84,6 +84,14 @@ WATCH_FUT_MOVE_POINTS = {
     "BANKNIFTY": float(os.getenv("BANKNIFTY_WATCH_FUT_MOVE_POINTS", "70")),
     "NIFTY": float(os.getenv("NIFTY_WATCH_FUT_MOVE_POINTS", "25")),
 }
+REVERSE_FULL_FUT_MOVE_POINTS = {
+    "BANKNIFTY": float(os.getenv("BANKNIFTY_REVERSE_FULL_FUT_MOVE_POINTS", "20")),
+    "NIFTY": float(os.getenv("NIFTY_REVERSE_FULL_FUT_MOVE_POINTS", "7")),
+}
+REVERSE_ITM_WRITING_MIN_CR = {
+    "BANKNIFTY": float(os.getenv("BANKNIFTY_REVERSE_ITM_WRITING_MIN_CR", "10")),
+    "NIFTY": float(os.getenv("NIFTY_REVERSE_ITM_WRITING_MIN_CR", "10")),
+}
 
 BULLISH_COMPONENTS = ("CALL_SC", "PUT_WR", "CALL_BUY", "PUT_UNW")
 BEARISH_COMPONENTS = ("CALL_WR", "CALL_UNW", "PUT_BUY", "PUT_SC")
@@ -456,6 +464,13 @@ def component_support(rows, side):
     top = sorted(totals.items(), key=lambda item: item[1], reverse=True)
     return total, other, top
 
+def itm_writing_support(rows, side):
+    label = "PUT_WR" if side == "CALL" else "CALL_WR"
+    total = 0.0
+    for row in rows:
+        total += row["metrics"].get("components", {}).get(label, {}).get("itm", 0.0)
+    return total, label
+
 def future_price_move(rows, side):
     prices = [row.get("price") for row in rows]
     if any(price is None for price in prices):
@@ -534,7 +549,7 @@ def fmt_window(rows):
 def fmt_components(top):
     return ", ".join(f"{label} {fmt_cr(value)}" for label, value in top[:3])
 
-def evaluate_window_signal(symbol, rows, side, mode):
+def evaluate_window_signal(symbol, rows, side, mode, reverse_active=False):
     latest_metrics = rows[-1]["metrics"]
     if side_from_bias(latest_metrics.get("option_bias", "")) != side:
         return None
@@ -566,6 +581,22 @@ def evaluate_window_signal(symbol, rows, side, mode):
     if component_total < component_min or component_other < component_other_min:
         return None
 
+    base_move_min = move_min
+    reverse_relaxed = False
+    itm_writing_total, itm_writing_label = itm_writing_support(rows, side)
+    itm_writing_min = REVERSE_ITM_WRITING_MIN_CR.get(
+        symbol,
+        REVERSE_ITM_WRITING_MIN_CR["BANKNIFTY"],
+    )
+    if reverse_active and mode == "FULL" and itm_writing_total >= itm_writing_min:
+        reverse_move_min = REVERSE_FULL_FUT_MOVE_POINTS.get(
+            symbol,
+            REVERSE_FULL_FUT_MOVE_POINTS["BANKNIFTY"],
+        )
+        if reverse_move_min < move_min:
+            move_min = reverse_move_min
+            reverse_relaxed = True
+
     side_move, raw_move = future_price_move(rows, side)
     if side_move is None or side_move < move_min:
         return None
@@ -591,12 +622,17 @@ def evaluate_window_signal(symbol, rows, side, mode):
         "side_move": side_move,
         "raw_move": raw_move,
         "move_min": move_min,
+        "base_move_min": base_move_min,
+        "reverse_relaxed": reverse_relaxed,
+        "itm_writing_total": itm_writing_total,
+        "itm_writing_label": itm_writing_label,
+        "itm_writing_min": itm_writing_min,
         "option_bias": latest_metrics.get("option_bias", "NA"),
         "future": future_check,
         "latest_price": rows[-1].get("price"),
     }
 
-def evaluate_full_signal(symbol):
+def evaluate_full_signal(symbol, active=None):
     rows = flow_rows_by_symbol.get(symbol, [])
     min_window = max(1, TURN_MIN_WINDOW)
     max_window = max(min_window, TURN_MAX_WINDOW)
@@ -607,8 +643,20 @@ def evaluate_full_signal(symbol):
         candidates = [
             candidate
             for candidate in (
-                evaluate_window_signal(symbol, recent, "CALL", "FULL"),
-                evaluate_window_signal(symbol, recent, "PUT", "FULL"),
+                evaluate_window_signal(
+                    symbol,
+                    recent,
+                    "CALL",
+                    "FULL",
+                    reverse_active=bool(active and active["side"] != "CALL"),
+                ),
+                evaluate_window_signal(
+                    symbol,
+                    recent,
+                    "PUT",
+                    "FULL",
+                    reverse_active=bool(active and active["side"] != "PUT"),
+                ),
             )
             if candidate
         ]
@@ -646,6 +694,14 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
     emoji = emoji_for_side(side)
     future = signal["future"]
     reverse_line = "\n**REVERSE CONFIRMED FULL OPPOSITE**" if reverse_confirmed else ""
+    relaxed_line = ""
+    if signal.get("reverse_relaxed"):
+        relaxed_line = (
+            f"\nREVERSE FILTER: FUT MOVE RELAXED "
+            f"{signal['base_move_min']:.0f}->{signal['move_min']:.0f} pts, "
+            f"{signal['itm_writing_label']} ITM {fmt_cr(signal['itm_writing_total'])} "
+            f">= {fmt_cr(signal['itm_writing_min'])}"
+        )
     confidence = "CONFIRMED" if future["confirmed"] else "NEUTRAL FUTURE"
     if future["warning"]:
         confidence = "OPTION STRONG, FUTURE WARNING"
@@ -665,7 +721,8 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
         f"FUTURE: move {fmt_points(signal['side_move'])} pts >= {signal['move_min']:.0f}, "
         f"bias {future['future_bias']} ({confidence})\n"
         f"FUT TURN/FLOW: same {fmt_cr(future['align_turn_sum'])}/{fmt_cr(future['align_flow_sum'])}, "
-        f"opp {fmt_cr(future['opp_turn_sum'])}/{fmt_cr(future['opp_flow_sum'])}\n"
+        f"opp {fmt_cr(future['opp_turn_sum'])}/{fmt_cr(future['opp_flow_sum'])}"
+        f"{relaxed_line}\n"
         f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**"
     )
 
@@ -774,7 +831,8 @@ async def main():
             if len(rows) > max_keep_rows:
                 del rows[:-max_keep_rows]
 
-            full_signal = evaluate_full_signal(symbol)
+            active = active_signal_for(symbol, now)
+            full_signal = evaluate_full_signal(symbol, active)
             if full_signal:
                 await send_full_signal(client, target_entity, symbol, full_signal, now)
                 continue
