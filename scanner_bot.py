@@ -69,6 +69,7 @@ FULL_TURN_MIN_CR = float(os.getenv("FULL_TURN_MIN_CR", "15"))
 FULL_OPPOSITE_MAX_CR = float(os.getenv("FULL_OPPOSITE_MAX_CR", "1"))
 FULL_COMPONENT_MIN_CR = float(os.getenv("FULL_COMPONENT_MIN_CR", "15"))
 FULL_COMPONENT_OTHER_MIN_CR = float(os.getenv("FULL_COMPONENT_OTHER_MIN_CR", "2"))
+FULL_ITM_WRITING_MIN_CR = float(os.getenv("FULL_ITM_WRITING_MIN_CR", "15"))
 WATCH_TURN_MIN_CR = float(os.getenv("WATCH_TURN_MIN_CR", "7"))
 WATCH_OPPOSITE_MAX_CR = float(os.getenv("WATCH_OPPOSITE_MAX_CR", "1.5"))
 WATCH_COMPONENT_MIN_CR = float(os.getenv("WATCH_COMPONENT_MIN_CR", "7"))
@@ -632,8 +633,76 @@ def evaluate_window_signal(symbol, rows, side, mode, reverse_active=False):
         "latest_price": rows[-1].get("price"),
     }
 
+def evaluate_fast_itm_writing_signal(symbol, rows, side):
+    latest_metrics = rows[-1]["metrics"]
+    if side_from_bias(latest_metrics.get("option_bias", "")) != side:
+        return None
+
+    turn_sum = 0.0
+    opposite_sum = 0.0
+    for row in rows:
+        turn, opposite = side_turn_values(row["metrics"], side)
+        turn_sum += turn
+        opposite_sum += opposite
+
+    if opposite_sum > FULL_OPPOSITE_MAX_CR:
+        return None
+
+    itm_writing_total, itm_writing_label = itm_writing_support(rows, side)
+    if itm_writing_total < FULL_ITM_WRITING_MIN_CR:
+        return None
+
+    component_total, component_other, top_components = component_support(rows, side)
+    future_check = future_side_check(rows, side)
+    if future_check["blocked"]:
+        return None
+
+    return {
+        "mode": "FULL",
+        "symbol": symbol,
+        "side": side,
+        "rows": rows,
+        "turn_sum": turn_sum,
+        "opposite_sum": opposite_sum,
+        "turn_min": FULL_ITM_WRITING_MIN_CR,
+        "opposite_max": FULL_OPPOSITE_MAX_CR,
+        "component_total": component_total,
+        "component_other": component_other,
+        "component_min": FULL_ITM_WRITING_MIN_CR,
+        "component_other_min": 0.0,
+        "top_components": top_components,
+        "side_move": None,
+        "raw_move": None,
+        "move_min": 0.0,
+        "base_move_min": 0.0,
+        "reverse_relaxed": False,
+        "itm_writing_total": itm_writing_total,
+        "itm_writing_label": itm_writing_label,
+        "itm_writing_min": FULL_ITM_WRITING_MIN_CR,
+        "option_bias": latest_metrics.get("option_bias", "NA"),
+        "future": future_check,
+        "latest_price": rows[-1].get("price"),
+        "signal_label": "FULL 2MIN ITM WRITING",
+        "skip_future_move": True,
+    }
+
 def evaluate_full_signal(symbol, active=None):
     rows = flow_rows_by_symbol.get(symbol, [])
+    for window in (1, 2):
+        if len(rows) < window:
+            continue
+        recent = rows[-window:]
+        candidates = [
+            candidate
+            for candidate in (
+                evaluate_fast_itm_writing_signal(symbol, recent, "CALL"),
+                evaluate_fast_itm_writing_signal(symbol, recent, "PUT"),
+            )
+            if candidate
+        ]
+        if candidates:
+            return max(candidates, key=lambda item: item["itm_writing_total"])
+
     min_window = max(1, TURN_MIN_WINDOW)
     max_window = max(min_window, TURN_MAX_WINDOW)
     for window in range(min_window, max_window + 1):
@@ -693,6 +762,7 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
     side = signal["side"]
     emoji = emoji_for_side(side)
     future = signal["future"]
+    signal_label = signal.get("signal_label", "FULL 2MIN OPTION+FUTURE")
     reverse_line = "\n**REVERSE CONFIRMED FULL OPPOSITE**" if reverse_confirmed else ""
     relaxed_line = ""
     if signal.get("reverse_relaxed"):
@@ -702,14 +772,31 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
             f"{signal['itm_writing_label']} ITM {fmt_cr(signal['itm_writing_total'])} "
             f">= {fmt_cr(signal['itm_writing_min'])}"
         )
+    fast_itm_line = ""
+    if signal.get("skip_future_move"):
+        fast_itm_line = (
+            f"\nITM WRITING: {signal['itm_writing_label']} ITM "
+            f"{fmt_cr(signal['itm_writing_total'])} >= "
+            f"{fmt_cr(signal['itm_writing_min'])}; FUTURE MOVE SKIPPED"
+        )
     confidence = "CONFIRMED" if future["confirmed"] else "NEUTRAL FUTURE"
     if future["warning"]:
         confidence = "OPTION STRONG, FUTURE WARNING"
+    if signal.get("skip_future_move"):
+        future_line = (
+            f"FUTURE: move skipped for ITM writing, "
+            f"bias {future['future_bias']} ({confidence})\n"
+        )
+    else:
+        future_line = (
+            f"FUTURE: move {fmt_points(signal['side_move'])} pts >= {signal['move_min']:.0f}, "
+            f"bias {future['future_bias']} ({confidence})\n"
+        )
 
     return (
         f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
         f"**ACTION: BUY {symbol} {strike} {option_type_for_side(side)}**\n"
-        f"**SIGNAL: {side} (FULL 2MIN OPTION+FUTURE)**"
+        f"**SIGNAL: {side} ({signal_label})**"
         f"{reverse_line}\n"
         f"WINDOW: {fmt_window(signal['rows'])}\n"
         f"OPTION: {fmt_cr(signal['turn_sum'])} >= {fmt_cr(signal['turn_min'])}, "
@@ -718,11 +805,11 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
         f"COMPONENT: {fmt_cr(signal['component_total'])} >= {fmt_cr(signal['component_min'])}, "
         f"other {fmt_cr(signal['component_other'])} >= {fmt_cr(signal['component_other_min'])}\n"
         f"TOP: {fmt_components(signal['top_components'])}\n"
-        f"FUTURE: move {fmt_points(signal['side_move'])} pts >= {signal['move_min']:.0f}, "
-        f"bias {future['future_bias']} ({confidence})\n"
+        f"{future_line}"
         f"FUT TURN/FLOW: same {fmt_cr(future['align_turn_sum'])}/{fmt_cr(future['align_flow_sum'])}, "
         f"opp {fmt_cr(future['opp_turn_sum'])}/{fmt_cr(future['opp_flow_sum'])}"
-        f"{relaxed_line}\n"
+        f"{relaxed_line}"
+        f"{fast_itm_line}\n"
         f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**"
     )
 
