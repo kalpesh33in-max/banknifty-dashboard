@@ -78,12 +78,12 @@ FULL_DUP_MIN = int(os.getenv("FULL_DUP_MIN", "10"))
 WATCH_DUP_MIN = int(os.getenv("WATCH_DUP_MIN", "5"))
 
 FULL_FUT_MOVE_POINTS = {
-    "BANKNIFTY": float(os.getenv("BANKNIFTY_FULL_FUT_MOVE_POINTS", "50")),
-    "NIFTY": float(os.getenv("NIFTY_FULL_FUT_MOVE_POINTS", "20")),
+    "BANKNIFTY": float(os.getenv("BANKNIFTY_FULL_FUT_MOVE_POINTS", "20")),
+    "NIFTY": float(os.getenv("NIFTY_FULL_FUT_MOVE_POINTS", "5")),
 }
 WATCH_FUT_MOVE_POINTS = {
-    "BANKNIFTY": float(os.getenv("BANKNIFTY_WATCH_FUT_MOVE_POINTS", "70")),
-    "NIFTY": float(os.getenv("NIFTY_WATCH_FUT_MOVE_POINTS", "25")),
+    "BANKNIFTY": float(os.getenv("BANKNIFTY_WATCH_FUT_MOVE_POINTS", "20")),
+    "NIFTY": float(os.getenv("NIFTY_WATCH_FUT_MOVE_POINTS", "5")),
 }
 REVERSE_FULL_FUT_MOVE_POINTS = {
     "BANKNIFTY": float(os.getenv("BANKNIFTY_REVERSE_FULL_FUT_MOVE_POINTS", "20")),
