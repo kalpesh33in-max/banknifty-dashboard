@@ -69,7 +69,8 @@ FULL_TURN_MIN_CR = float(os.getenv("FULL_TURN_MIN_CR", "15"))
 FULL_OPPOSITE_MAX_CR = float(os.getenv("FULL_OPPOSITE_MAX_CR", "1"))
 FULL_COMPONENT_MIN_CR = float(os.getenv("FULL_COMPONENT_MIN_CR", "15"))
 FULL_COMPONENT_OTHER_MIN_CR = float(os.getenv("FULL_COMPONENT_OTHER_MIN_CR", "2"))
-FULL_ITM_WRITING_MIN_CR = float(os.getenv("FULL_ITM_WRITING_MIN_CR", "15"))
+FULL_REQUIRED_ITM_WRITING_MIN_CR = float(os.getenv("FULL_REQUIRED_ITM_WRITING_MIN_CR", "5"))
+FAST_ITM_WRITING_MIN_CR = float(os.getenv("FAST_ITM_WRITING_MIN_CR", "10"))
 WATCH_TURN_MIN_CR = float(os.getenv("WATCH_TURN_MIN_CR", "7"))
 WATCH_OPPOSITE_MAX_CR = float(os.getenv("WATCH_OPPOSITE_MAX_CR", "1.5"))
 WATCH_COMPONENT_MIN_CR = float(os.getenv("WATCH_COMPONENT_MIN_CR", "7"))
@@ -585,11 +586,15 @@ def evaluate_window_signal(symbol, rows, side, mode, reverse_active=False):
     base_move_min = move_min
     reverse_relaxed = False
     itm_writing_total, itm_writing_label = itm_writing_support(rows, side)
-    itm_writing_min = REVERSE_ITM_WRITING_MIN_CR.get(
+    required_itm_writing_min = FULL_REQUIRED_ITM_WRITING_MIN_CR if mode == "FULL" else 0.0
+    if mode == "FULL" and itm_writing_total < required_itm_writing_min:
+        return None
+
+    reverse_itm_writing_min = REVERSE_ITM_WRITING_MIN_CR.get(
         symbol,
         REVERSE_ITM_WRITING_MIN_CR["BANKNIFTY"],
     )
-    if reverse_active and mode == "FULL" and itm_writing_total >= itm_writing_min:
+    if reverse_active and mode == "FULL" and itm_writing_total >= reverse_itm_writing_min:
         reverse_move_min = REVERSE_FULL_FUT_MOVE_POINTS.get(
             symbol,
             REVERSE_FULL_FUT_MOVE_POINTS["BANKNIFTY"],
@@ -627,7 +632,8 @@ def evaluate_window_signal(symbol, rows, side, mode, reverse_active=False):
         "reverse_relaxed": reverse_relaxed,
         "itm_writing_total": itm_writing_total,
         "itm_writing_label": itm_writing_label,
-        "itm_writing_min": itm_writing_min,
+        "itm_writing_min": required_itm_writing_min,
+        "reverse_itm_writing_min": reverse_itm_writing_min,
         "option_bias": latest_metrics.get("option_bias", "NA"),
         "future": future_check,
         "latest_price": rows[-1].get("price"),
@@ -649,13 +655,11 @@ def evaluate_fast_itm_writing_signal(symbol, rows, side):
         return None
 
     itm_writing_total, itm_writing_label = itm_writing_support(rows, side)
-    if itm_writing_total < FULL_ITM_WRITING_MIN_CR:
+    if itm_writing_total < FAST_ITM_WRITING_MIN_CR:
         return None
 
     component_total, component_other, top_components = component_support(rows, side)
     future_check = future_side_check(rows, side)
-    if future_check["blocked"]:
-        return None
 
     return {
         "mode": "FULL",
@@ -664,11 +668,11 @@ def evaluate_fast_itm_writing_signal(symbol, rows, side):
         "rows": rows,
         "turn_sum": turn_sum,
         "opposite_sum": opposite_sum,
-        "turn_min": FULL_ITM_WRITING_MIN_CR,
+        "turn_min": FAST_ITM_WRITING_MIN_CR,
         "opposite_max": FULL_OPPOSITE_MAX_CR,
         "component_total": component_total,
         "component_other": component_other,
-        "component_min": FULL_ITM_WRITING_MIN_CR,
+        "component_min": FAST_ITM_WRITING_MIN_CR,
         "component_other_min": 0.0,
         "top_components": top_components,
         "side_move": None,
@@ -678,11 +682,11 @@ def evaluate_fast_itm_writing_signal(symbol, rows, side):
         "reverse_relaxed": False,
         "itm_writing_total": itm_writing_total,
         "itm_writing_label": itm_writing_label,
-        "itm_writing_min": FULL_ITM_WRITING_MIN_CR,
+        "itm_writing_min": FAST_ITM_WRITING_MIN_CR,
         "option_bias": latest_metrics.get("option_bias", "NA"),
         "future": future_check,
         "latest_price": rows[-1].get("price"),
-        "signal_label": "FULL 2MIN ITM WRITING",
+        "signal_label": "FULL 2MIN FAST ITM WRITING",
         "skip_future_move": True,
     }
 
@@ -766,18 +770,23 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
     reverse_line = "\n**REVERSE CONFIRMED FULL OPPOSITE**" if reverse_confirmed else ""
     relaxed_line = ""
     if signal.get("reverse_relaxed"):
+        reverse_itm_writing_min = signal.get(
+            "reverse_itm_writing_min",
+            signal.get("itm_writing_min", 0.0),
+        )
         relaxed_line = (
             f"\nREVERSE FILTER: FUT MOVE RELAXED "
             f"{signal['base_move_min']:.0f}->{signal['move_min']:.0f} pts, "
             f"{signal['itm_writing_label']} ITM {fmt_cr(signal['itm_writing_total'])} "
-            f">= {fmt_cr(signal['itm_writing_min'])}"
+            f">= {fmt_cr(reverse_itm_writing_min)}"
         )
-    fast_itm_line = ""
-    if signal.get("skip_future_move"):
-        fast_itm_line = (
+    itm_writing_line = ""
+    if signal.get("itm_writing_min", 0.0) > 0:
+        suffix = "; FUTURE MOVE SKIPPED" if signal.get("skip_future_move") else ""
+        itm_writing_line = (
             f"\nITM WRITING: {signal['itm_writing_label']} ITM "
             f"{fmt_cr(signal['itm_writing_total'])} >= "
-            f"{fmt_cr(signal['itm_writing_min'])}; FUTURE MOVE SKIPPED"
+            f"{fmt_cr(signal['itm_writing_min'])}{suffix}"
         )
     confidence = "CONFIRMED" if future["confirmed"] else "NEUTRAL FUTURE"
     if future["warning"]:
@@ -809,7 +818,7 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
         f"FUT TURN/FLOW: same {fmt_cr(future['align_turn_sum'])}/{fmt_cr(future['align_flow_sum'])}, "
         f"opp {fmt_cr(future['opp_turn_sum'])}/{fmt_cr(future['opp_flow_sum'])}"
         f"{relaxed_line}"
-        f"{fast_itm_line}\n"
+        f"{itm_writing_line}\n"
         f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**"
     )
 
@@ -835,6 +844,16 @@ def build_watch_alert(symbol, signal, active=None):
         f"TOP: {fmt_components(signal['top_components'])}"
     )
 
+def build_reverse_exit_alert(symbol, active, signal):
+    return (
+        "⚠️ **REVERSE EXIT**\n\n"
+        f"**ACTION: EXIT {symbol}**\n"
+        f"OLD: {symbol} {active['strike']} {option_type_for_side(active['side'])}\n"
+        f"NEW: BUY {symbol} {get_atm(signal['latest_price'], symbol) if signal['latest_price'] else 'ATM'} "
+        f"{option_type_for_side(signal['side'])}\n"
+        f"REASON: {signal.get('signal_label', 'FULL 2MIN OPTION+FUTURE')}"
+    )
+
 async def send_full_signal(client, target_id, symbol, signal, now):
     side = signal["side"]
     active = active_signal_for(symbol, now)
@@ -845,6 +864,8 @@ async def send_full_signal(client, target_id, symbol, signal, now):
 
     strike = get_atm(signal["latest_price"], symbol) if signal["latest_price"] else "ATM"
     sl, tg = risk_points_for(symbol)
+    if reverse_confirmed:
+        await safe_send(client, target_id, build_reverse_exit_alert(symbol, active, signal))
     await safe_send(
         client,
         target_id,
