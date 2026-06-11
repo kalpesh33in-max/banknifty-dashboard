@@ -70,7 +70,7 @@ FULL_OPPOSITE_MAX_CR = float(os.getenv("FULL_OPPOSITE_MAX_CR", "1"))
 FULL_COMPONENT_MIN_CR = float(os.getenv("FULL_COMPONENT_MIN_CR", "15"))
 FULL_COMPONENT_OTHER_MIN_CR = float(os.getenv("FULL_COMPONENT_OTHER_MIN_CR", "2"))
 FULL_REQUIRED_ITM_WRITING_MIN_CR = float(os.getenv("FULL_REQUIRED_ITM_WRITING_MIN_CR", "5"))
-FAST_ITM_WRITING_MIN_CR = float(os.getenv("FAST_ITM_WRITING_MIN_CR", "10"))
+FAST_ITM_WRITING_MIN_CR = float(os.getenv("FAST_ITM_WRITING_MIN_CR", "5"))
 WATCH_TURN_MIN_CR = float(os.getenv("WATCH_TURN_MIN_CR", "7"))
 WATCH_OPPOSITE_MAX_CR = float(os.getenv("WATCH_OPPOSITE_MAX_CR", "1.5"))
 WATCH_COMPONENT_MIN_CR = float(os.getenv("WATCH_COMPONENT_MIN_CR", "7"))
@@ -651,7 +651,7 @@ def evaluate_fast_itm_writing_signal(symbol, rows, side):
         turn_sum += turn
         opposite_sum += opposite
 
-    if opposite_sum > FULL_OPPOSITE_MAX_CR:
+    if opposite_sum >= FULL_OPPOSITE_MAX_CR:
         return None
 
     itm_writing_total, itm_writing_label = itm_writing_support(rows, side)
@@ -670,6 +670,7 @@ def evaluate_fast_itm_writing_signal(symbol, rows, side):
         "opposite_sum": opposite_sum,
         "turn_min": FAST_ITM_WRITING_MIN_CR,
         "opposite_max": FULL_OPPOSITE_MAX_CR,
+        "opposite_operator": "<",
         "component_total": component_total,
         "component_other": component_other,
         "component_min": FAST_ITM_WRITING_MIN_CR,
@@ -767,6 +768,7 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
     emoji = emoji_for_side(side)
     future = signal["future"]
     signal_label = signal.get("signal_label", "FULL 2MIN OPTION+FUTURE")
+    opposite_operator = signal.get("opposite_operator", "<=")
     reverse_line = "\n**REVERSE CONFIRMED FULL OPPOSITE**" if reverse_confirmed else ""
     relaxed_line = ""
     if signal.get("reverse_relaxed"):
@@ -809,7 +811,7 @@ def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
         f"{reverse_line}\n"
         f"WINDOW: {fmt_window(signal['rows'])}\n"
         f"OPTION: {fmt_cr(signal['turn_sum'])} >= {fmt_cr(signal['turn_min'])}, "
-        f"opposite {fmt_cr(signal['opposite_sum'])} <= {fmt_cr(signal['opposite_max'])}\n"
+        f"opposite {fmt_cr(signal['opposite_sum'])} {opposite_operator} {fmt_cr(signal['opposite_max'])}\n"
         f"BIAS: {signal['option_bias']}\n"
         f"COMPONENT: {fmt_cr(signal['component_total'])} >= {fmt_cr(signal['component_min'])}, "
         f"other {fmt_cr(signal['component_other'])} >= {fmt_cr(signal['component_other_min'])}\n"
