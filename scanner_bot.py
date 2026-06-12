@@ -106,7 +106,8 @@ last_otm_signals_by_symbol = {}
 active_signals_by_symbol = {}
 pending_reverses_by_symbol = {}
 instant_itm_alerts = {}
-flow_rows_by_symbol = {}
+flow_rows_2min = {}
+flow_rows_5min = {}
 last_strategy_alerts = {}
 
 # ---------------- UTILITY FUNCTIONS ---------------- #
@@ -564,7 +565,7 @@ def get_side_components(rows, side):
 
     return wr_label, sc_label, itm_wr, otm_wr, itm_sc, otm_sc
 
-def evaluate_direct_signals(symbol, rows, side):
+def evaluate_direct_signals(symbol, rows, rows_5min, side):
     latest_metrics = rows[-1]["metrics"]
     if side_from_bias(latest_metrics.get("option_bias", "")) != side:
         return None
@@ -580,19 +581,26 @@ def evaluate_direct_signals(symbol, rows, side):
         return None
 
     wr_label, sc_label, itm_wr, otm_wr, itm_sc, otm_sc = get_side_components(rows, side)
+    
+    # 5 MIN flow check
+    latest_5min_row = [rows_5min[-1]] if rows_5min else []
+    _, _, itm_wr_5, otm_wr_5, itm_sc_5, otm_sc_5 = get_side_components(latest_5min_row, side)
 
     signal_type = None
     trigger_line = ""
 
-    if otm_wr >= 15.0:
+    if otm_wr >= 15.0 and otm_wr_5 >= 1.5:
         signal_type = "DIRECT: AGGRESSIVE OTM WRITER"
-        trigger_line = f"{wr_label} OTM {fmt_cr(otm_wr)} >= 15.00Cr"
+        trigger_line = f"{wr_label} OTM {fmt_cr(otm_wr)} >= 15.00Cr (5MIN {fmt_cr(otm_wr_5)} >= 1.50Cr)"
+    elif otm_sc >= 15.0 and otm_sc_5 >= 1.5:
+        signal_type = "DIRECT: AGGRESSIVE OTM SHORT COVERING"
+        trigger_line = f"{sc_label} OTM {fmt_cr(otm_sc)} >= 15.00Cr (5MIN {fmt_cr(otm_sc_5)} >= 1.50Cr)"
+    elif itm_sc >= 10.0 and itm_sc_5 >= 1.0:
+        signal_type = "DIRECT: AGGRESSIVE ITM SHORT COVERING"
+        trigger_line = f"{sc_label} ITM {fmt_cr(itm_sc)} >= 10.00Cr (5MIN {fmt_cr(itm_sc_5)} >= 1.00Cr)"
     elif itm_wr >= 8.0:
         signal_type = "DIRECT: AGGRESSIVE ITM WRITER"
         trigger_line = f"{wr_label} ITM {fmt_cr(itm_wr)} >= 8.00Cr"
-    elif itm_sc >= 10.0:
-        signal_type = "DIRECT: AGGRESSIVE ITM SHORT COVERING"
-        trigger_line = f"{sc_label} ITM {fmt_cr(itm_sc)} >= 10.00Cr"
 
     if not signal_type:
         return None
@@ -673,7 +681,8 @@ def evaluate_standard_signal(symbol, rows, side):
     }
 
 def evaluate_full_signal(symbol, active=None):
-    rows = flow_rows_by_symbol.get(symbol, [])
+    rows = flow_rows_2min.get(symbol, [])
+    rows_5min = flow_rows_5min.get(symbol, [])
     
     for window in (1, 2):
         if len(rows) < window:
@@ -681,8 +690,8 @@ def evaluate_full_signal(symbol, active=None):
         recent = rows[-window:]
         candidates = [
             candidate for candidate in (
-                evaluate_direct_signals(symbol, recent, "CALL"),
-                evaluate_direct_signals(symbol, recent, "PUT"),
+                evaluate_direct_signals(symbol, recent, rows_5min, "CALL"),
+                evaluate_direct_signals(symbol, recent, rows_5min, "PUT"),
             ) if candidate
         ]
         if candidates:
@@ -706,7 +715,7 @@ def evaluate_full_signal(symbol, active=None):
     return None
 
 def evaluate_watch_signal(symbol):
-    rows = flow_rows_by_symbol.get(symbol, [])
+    rows = flow_rows_2min.get(symbol, [])
     if len(rows) < 2:
         return None
     recent = rows[-2:]
@@ -892,7 +901,12 @@ async def main():
         if not text: return
         now = datetime.datetime.now(IST)
         
-        if "2 MIN" not in text.upper():
+        upper_text = text.upper()
+        if "2 MIN" in upper_text:
+            interval = 2
+        elif "5 MIN" in upper_text:
+            interval = 5
+        else:
             return
 
         max_keep_rows = max(TURN_MAX_WINDOW + 3, 8)
@@ -906,20 +920,26 @@ async def main():
                 continue
 
             price = get_future_price(section, symbol)
-            rows = flow_rows_by_symbol.setdefault(symbol, [])
+            
+            if interval == 2:
+                rows = flow_rows_2min.setdefault(symbol, [])
+            else:
+                rows = flow_rows_5min.setdefault(symbol, [])
+                
             rows.append(build_flow_row(now, price, metrics))
             if len(rows) > max_keep_rows:
                 del rows[:-max_keep_rows]
 
-            active = active_signal_for(symbol, now)
-            full_signal = evaluate_full_signal(symbol, active)
-            if full_signal:
-                await send_full_signal(client, target_entity, symbol, full_signal, now)
-                continue
+            if interval == 2:
+                active = active_signal_for(symbol, now)
+                full_signal = evaluate_full_signal(symbol, active)
+                if full_signal:
+                    await send_full_signal(client, target_entity, symbol, full_signal, now)
+                    continue
 
-            watch_signal = evaluate_watch_signal(symbol)
-            if watch_signal:
-                await send_watch_signal(client, target_entity, symbol, watch_signal, now)
+                watch_signal = evaluate_watch_signal(symbol)
+                if watch_signal:
+                    await send_watch_signal(client, target_entity, symbol, watch_signal, now)
 
     await client.run_until_disconnected()
 
