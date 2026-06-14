@@ -16,174 +16,52 @@ TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
 
 IST = pytz.timezone("Asia/Kolkata")
 
-def env_bool(name, default="false"):
-    return str(os.getenv(name, default)).strip().lower() in ("1", "true", "yes", "on")
+# ---------------- MASTER LOGIC THRESHOLDS ---------------- #
+VOL_2MIN_CUMULATIVE = 15.0      # Cr (Sum of last 3 windows)
+FUTURES_LEAD_5MIN = 4.0         # Cr (Instant trigger if futures are massive)
+DAILY_TRADE_LIMIT = 3           # Max 3 high-conviction trades
+PRICE_HOLD_WINDOWS = 2          # Wait 4 mins (2 windows) to confirm price stability
+OPPOSITE_EXIT_THRESHOLD = 5.0   # Cr
 
-# ---------------- INSTRUMENT SPECS ---------------- #
-INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY"]
-STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
-WATCH_SYMBOLS = INDEX_SYMBOLS + STOCK_SYMBOLS
+INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY"]
+WATCH_SYMBOLS = INDEX_SYMBOLS + ["SENSEX", "MIDCPNIFTY", "HDFCBANK", "ICICIBANK", "RELIANCE"]
 
-# Updated Strike Steps based on your requirements
-STRIKE_STEPS = {
-    "BANKNIFTY": int(os.getenv("BANKNIFTY_STRIKE_STEP", "100")),
-    "NIFTY": int(os.getenv("NIFTY_STRIKE_STEP", "50")),
-    "SENSEX": int(os.getenv("SENSEX_STRIKE_STEP", "100")),
-    "MIDCPNIFTY": int(os.getenv("MIDCPNIFTY_STRIKE_STEP", "25")),
-    "HDFCBANK": 5,   # Updated to 5
-    "ICICIBANK": 10, # Updated to 10
-    "RELIANCE": 10,  # Updated to 10
-}
-
-FUT_LOT_THRESHOLD = int(os.getenv("FUT_LOT_THRESHOLD", "3000"))
-ITM_WRITER_THRESHOLD_CR = float(os.getenv("ITM_WRITER_THRESHOLD_CR", "11"))
-ITM_SC_THRESHOLD_CR = float(os.getenv("ITM_SC_THRESHOLD_CR", "20"))
-ITM_WRITER_CONFLICT_CR = float(os.getenv("ITM_WRITER_CONFLICT_CR", "10"))
-SC_BOTH_SIDE_LEG_THRESHOLD_CR = float(os.getenv("SC_BOTH_SIDE_LEG_THRESHOLD_CR", "10"))
-SC_BOTH_SIDE_TOTAL_THRESHOLD_CR = float(os.getenv("SC_BOTH_SIDE_TOTAL_THRESHOLD_CR", "20"))
-BANKNIFTY_OTM_WR_2MIN_TURN_CR = float(os.getenv("BANKNIFTY_OTM_WR_2MIN_TURN_CR", "10"))
-BANKNIFTY_OTM_WR_2MIN_WRITER_CR = float(os.getenv("BANKNIFTY_OTM_WR_2MIN_WRITER_CR", "10"))
-BANKNIFTY_OTM_WR_5MIN_TURN_CR = float(os.getenv("BANKNIFTY_OTM_WR_5MIN_TURN_CR", "2"))
-BANKNIFTY_OTM_WR_5MIN_WRITER_CR = float(os.getenv("BANKNIFTY_OTM_WR_5MIN_WRITER_CR", "2"))
-REVERSE_CONFIRM_TURN_CR = float(os.getenv("REVERSE_CONFIRM_TURN_CR", "5"))
-REVERSE_CONFIRM_OPPOSITE_MAX_CR = float(os.getenv("REVERSE_CONFIRM_OPPOSITE_MAX_CR", "2"))
-REVERSE_LATE_START = os.getenv("REVERSE_LATE_START", "14:45")
-REVERSE_LATE_CONFIRMATIONS = int(os.getenv("REVERSE_LATE_CONFIRMATIONS", "2"))
-REVERSE_VERY_STRONG_TURN_CR = float(os.getenv("REVERSE_VERY_STRONG_TURN_CR", "10"))
-REVERSE_VERY_STRONG_OPPOSITE_MAX_CR = float(os.getenv("REVERSE_VERY_STRONG_OPPOSITE_MAX_CR", "1"))
-ACTIVE_SIGNAL_MAX_AGE_MIN = int(os.getenv("ACTIVE_SIGNAL_MAX_AGE_MIN", "90"))
-ENABLE_MATCHED_IN_ALERTS = env_bool("ENABLE_MATCHED_IN_ALERTS", "true")
-ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS = env_bool(
-    "ENABLE_2MIN_5MIN_DUAL_MATCH_ALERTS",
-    "true",
-)
-
-STRATEGY_SYMBOLS = [
-    s.strip().upper()
-    for s in os.getenv("STRATEGY_SYMBOLS", "BANKNIFTY,NIFTY").split(",")
-    if s.strip()
-]
-TURN_MIN_WINDOW = int(os.getenv("TURN_MIN_WINDOW", "3"))
-TURN_MAX_WINDOW = int(os.getenv("TURN_MAX_WINDOW", "5"))
-FULL_TURN_MIN_CR = float(os.getenv("FULL_TURN_MIN_CR", "15"))
-FULL_OPPOSITE_MAX_CR = float(os.getenv("FULL_OPPOSITE_MAX_CR", "1"))
-FULL_COMPONENT_MIN_CR = float(os.getenv("FULL_COMPONENT_MIN_CR", "15"))
-FULL_COMPONENT_OTHER_MIN_CR = float(os.getenv("FULL_COMPONENT_OTHER_MIN_CR", "2"))
-FULL_REQUIRED_ITM_WRITING_MIN_CR = float(os.getenv("FULL_REQUIRED_ITM_WRITING_MIN_CR", "4"))
-FAST_ITM_WRITING_MIN_CR = float(os.getenv("FAST_ITM_WRITING_MIN_CR", "5"))
-WATCH_TURN_MIN_CR = float(os.getenv("WATCH_TURN_MIN_CR", "7"))
-WATCH_OPPOSITE_MAX_CR = float(os.getenv("WATCH_OPPOSITE_MAX_CR", "1.5"))
-WATCH_COMPONENT_MIN_CR = float(os.getenv("WATCH_COMPONENT_MIN_CR", "7"))
-FUTURE_OPPOSITE_BLOCK_CR = float(os.getenv("FUTURE_OPPOSITE_BLOCK_CR", "5"))
-FULL_DUP_MIN = int(os.getenv("FULL_DUP_MIN", "10"))
-WATCH_DUP_MIN = int(os.getenv("WATCH_DUP_MIN", "5"))
-
-FULL_FUT_MOVE_POINTS = {
-    "BANKNIFTY": float(os.getenv("BANKNIFTY_FULL_FUT_MOVE_POINTS", "20")),
-    "NIFTY": float(os.getenv("NIFTY_FULL_FUT_MOVE_POINTS", "5")),
-}
-WATCH_FUT_MOVE_POINTS = {
-    "BANKNIFTY": float(os.getenv("BANKNIFTY_WATCH_FUT_MOVE_POINTS", "20")),
-    "NIFTY": float(os.getenv("NIFTY_WATCH_FUT_MOVE_POINTS", "5")),
-}
-REVERSE_FULL_FUT_MOVE_POINTS = {
-    "BANKNIFTY": float(os.getenv("BANKNIFTY_REVERSE_FULL_FUT_MOVE_POINTS", "20")),
-    "NIFTY": float(os.getenv("NIFTY_REVERSE_FULL_FUT_MOVE_POINTS", "7")),
-}
-REVERSE_ITM_WRITING_MIN_CR = {
-    "BANKNIFTY": float(os.getenv("BANKNIFTY_REVERSE_ITM_WRITING_MIN_CR", "10")),
-    "NIFTY": float(os.getenv("NIFTY_REVERSE_ITM_WRITING_MIN_CR", "10")),
-}
-
-BULLISH_COMPONENTS = ("CALL_SC", "PUT_WR", "CALL_BUY", "PUT_UNW")
-BEARISH_COMPONENTS = ("CALL_WR", "CALL_UNW", "PUT_BUY", "PUT_SC")
+STRIKE_STEPS = {"BANKNIFTY": 100, "NIFTY": 50}
 
 # State Tracking
-last_index_signals = {}
-last_fut_signals = {}
-last_signals_by_symbol = {}
-last_otm_signals_by_symbol = {}
-active_signals_by_symbol = {}
-pending_reverses_by_symbol = {}
-instant_itm_alerts = {}
-flow_rows_2min = {}
-flow_rows_5min = {}
-last_strategy_alerts = {}
+flow_history_2min = {s: [] for s in INDEX_SYMBOLS}
+last_5min_sync = {s: {"bias": None, "fut_bull": 0.0, "fut_bear": 0.0} for s in INDEX_SYMBOLS}
+daily_trade_count = 0
+active_trade = None
+pending_trade = None # {symbol, side, t0_price, wait_count}
 
 # ---------------- UTILITY FUNCTIONS ---------------- #
 
 def parse_target_ref(value):
-    if not value:
-        raise RuntimeError("TARGET_BOT env var is not set")
+    if not value: raise RuntimeError("TARGET_BOT env var is not set")
     value = value.strip()
     value = re.sub(r"^https?://t\.me/", "", value, flags=re.IGNORECASE).strip("/")
     return int(value) if re.fullmatch(r"-?\d+", value) else value
 
 TARGET_BOT_REF = parse_target_ref(TARGET_BOT_RAW)
 
-def _entity_key(value):
-    return re.sub(r"[\s_@]+", "", str(value or "").lower())
-
 async def resolve_target_entity(client, target_ref):
-    candidates = [target_ref]
-    if isinstance(target_ref, str) and not target_ref.startswith("@"):
-        candidates.append(f"@{target_ref}")
-
-    last_error = None
-    for candidate in candidates:
-        try:
-            return await client.get_entity(candidate)
-        except Exception as e:
-            last_error = e
-
-    target_key = _entity_key(target_ref)
-    async for dialog in client.iter_dialogs():
-        entity = dialog.entity
-        entity_id = str(getattr(entity, "id", ""))
-        full_channel_id = f"-100{entity_id}" if entity_id and not entity_id.startswith("-") else entity_id
-        values = [
-            getattr(entity, "username", None),
-            getattr(entity, "title", None),
-            getattr(entity, "first_name", None),
-            dialog.name,
-            entity_id,
-            full_channel_id,
-        ]
-        if any(_entity_key(value) == target_key for value in values):
-            return entity
-
-    raise RuntimeError(f"Could not resolve TARGET_BOT={target_ref!r}. Last error: {last_error}")
+    try: return await client.get_entity(target_ref)
+    except:
+        async for dialog in client.iter_dialogs():
+            if str(target_ref) in [dialog.name, getattr(dialog.entity, "username", ""), str(dialog.id)]:
+                return dialog.entity
+    raise RuntimeError(f"Could not resolve TARGET_BOT={target_ref}")
 
 def get_atm(price, symbol):
-    """Uses standard rounding to the nearest strike step for accuracy."""
     step = STRIKE_STEPS.get(symbol.upper(), 100)
     return int(round(float(price) / step) * step)
-
-def risk_points_for(symbol):
-    """Returns (SL, Target) based on instrument type."""
-    return (3, 6) if symbol.upper() in STOCK_SYMBOLS else (30, 60)
-
-def get_dual_match_thresholds(symbol, short_lbl, now):
-    if symbol == "BANKNIFTY" and 1 <= now.day <= 10:
-        return (5.0, 5.0) if short_lbl == "2MIN" else (1.0, 1.0)
-    return (10.0, 6.5) if short_lbl == "2MIN" else (2.0, 1.0)
 
 def _normalize_cr(value, unit):
     try:
         val = float(value)
         return val if unit == "Cr" else (val / 100 if unit == "L" else 0.0)
     except: return 0.0
-
-def get_writing_values(label, text):
-    pattern = rf"{label}\s+\d+\(([\d.]+)(Cr|L|)\)\s+\d+\(([\d.]+)(Cr|L|)\)"
-    matches = re.findall(pattern, text, re.IGNORECASE)
-    if not matches: return 0.0, 0.0
-    itm_val, itm_unit, otm_val, otm_unit = matches[0]
-    return _normalize_cr(itm_val, itm_unit), _normalize_cr(otm_val, otm_unit)
-
-def get_component_totals(label, text):
-    itm, otm = get_writing_values(label, text)
-    return {"itm": itm, "otm": otm, "total": itm + otm}
 
 def get_value(label, text):
     pattern = rf"{label}\s*:\s*([\d.]+)(Cr|L|)"
@@ -198,21 +76,19 @@ def get_bias(label, text):
     return matches[-1].strip() if matches else ""
 
 def get_future_price(text, symbol):
-    if not text:
-        return None
-    pattern = rf"(?<![A-Z0-9_]){re.escape(symbol)}\s*\(FUT:\s*([\d.]+)\)"
+    pattern = rf"{re.escape(symbol)}\s*\(FUT:\s*([\d.]+)\)"
     match = re.search(pattern, text, re.IGNORECASE)
     return float(match.group(1)) if match else None
 
 def extract_instrument_section(text, symbol):
-    sym_pat = rf"(?<![A-Z0-9_]){re.escape(symbol)}\s*\(FUT:"
+    sym_pat = rf"{re.escape(symbol)}\s*\(FUT:"
     m = re.search(sym_pat, text, re.IGNORECASE)
     if not m: return None
     start = m.start()
     next_pos = [len(text)]
     for sym in WATCH_SYMBOLS:
         if sym == symbol: continue
-        m2 = re.search(rf"(?<![A-Z0-9_]){re.escape(sym)}\s*\(FUT:", text[m.end():], re.IGNORECASE)
+        m2 = re.search(rf"{re.escape(sym)}\s*\(FUT:", text[m.end():], re.IGNORECASE)
         if m2: next_pos.append(m.end() + m2.start())
     return text[start:min(next_pos)]
 
@@ -221,725 +97,134 @@ def parse_flow_metrics(section):
     parts = section.split("---- FUTURES FLOW ----", 1)
     opt_part = parts[0]
     fut_part = parts[1] if len(parts) > 1 else ""
-    components = {
-        label: get_component_totals(label, opt_part)
-        for label in (
-            "CALL_WR", "PUT_WR", "CALL_SC", "PUT_SC",
-            "CALL_BUY", "PUT_BUY", "CALL_UNW", "PUT_UNW",
-        )
-    }
-    fut_flow = re.search(
-        r"(FUT_BUY|FUT_SELL|FUT_UNW)\s*:\s*(\d+)\s+lots\s*\(([\d.]+)(Cr|L|)\)",
-        fut_part,
-        re.IGNORECASE,
-    )
-    fut_flow_type = fut_flow.group(1).upper() if fut_flow else ""
-    fut_flow_lots = int(fut_flow.group(2)) if fut_flow else 0
-    fut_flow_cr = (
-        _normalize_cr(fut_flow.group(3), fut_flow.group(4))
-        if fut_flow else 0.0
-    )
-    c_itm, c_otm = components["CALL_WR"]["itm"], components["CALL_WR"]["otm"]
-    p_itm, p_otm = components["PUT_WR"]["itm"], components["PUT_WR"]["otm"]
-    cs_itm, cs_otm = components["CALL_SC"]["itm"], components["CALL_SC"]["otm"]
-    ps_itm, ps_otm = components["PUT_SC"]["itm"], components["PUT_SC"]["otm"]
     return {
-        "option_bias": get_bias("Option Bias", opt_part),
+        "opt_bias": get_bias("Option Bias", opt_part),
         "bull_t": get_value("Bullish Turn", opt_part),
         "bear_t": get_value("Bearish Turn", opt_part),
-        "future_bias": get_bias("Future Bias", fut_part),
-        "future_bull_t": get_value("Bullish Turn", fut_part),
-        "future_bear_t": get_value("Bearish Turn", fut_part),
-        "future_flow_type": fut_flow_type,
-        "future_flow_lots": fut_flow_lots,
-        "future_flow_cr": fut_flow_cr,
-        "components": components,
-        "call_itm": c_itm, "call_otm": c_otm,
-        "put_itm": p_itm, "put_otm": p_otm,
-        "call_sc_itm": cs_itm, "call_sc_otm": cs_otm,
-        "put_sc_itm": ps_itm, "put_sc_otm": ps_otm
+        "fut_bull": get_value("Bullish Turn", fut_part),
+        "fut_bear": get_value("Bearish Turn", fut_part),
     }
-
-async def safe_send(client, target_id, message):
-    try:
-        await client.send_message(target_id, message)
-    except Exception as e:
-        print(f"❌ Delivery Error: {e}")
-
-def option_type_for_side(side):
-    return "CE" if side == "CALL" else "PE"
-
-def emoji_for_side(side):
-    return "🟢" if side == "CALL" else "🔴"
-
-def hhmm_time(value):
-    return datetime.datetime.strptime(value, "%H:%M").time()
-
-def is_late_reverse_window(now):
-    return now.time() >= hhmm_time(REVERSE_LATE_START)
-
-def is_strong_option_bias(metrics, side):
-    bias = str(metrics.get("option_bias", "")).upper()
-    need = "BULLISH" if side == "CALL" else "BEARISH"
-    return need in bias and "MILD" not in bias and "STRONG" in bias
-
-def is_strong_opposite_future(metrics, side):
-    bias = str(metrics.get("future_bias", "")).upper()
-    if not bias or "MILD" in bias:
-        return False
-    if side == "CALL":
-        return "BEARISH" in bias and "STRONG" in bias
-    return "BULLISH" in bias and "STRONG" in bias
-
-def reverse_flow_confirmed(metrics, side):
-    if not is_strong_option_bias(metrics, side):
-        return False
-    if is_strong_opposite_future(metrics, side):
-        return False
-    if side == "CALL":
-        return (
-            metrics["bull_t"] >= REVERSE_CONFIRM_TURN_CR
-            and metrics["bear_t"] <= REVERSE_CONFIRM_OPPOSITE_MAX_CR
-        )
-    return (
-        metrics["bear_t"] >= REVERSE_CONFIRM_TURN_CR
-        and metrics["bull_t"] <= REVERSE_CONFIRM_OPPOSITE_MAX_CR
-    )
-
-def reverse_flow_very_strong(metrics, side):
-    bias = str(metrics.get("option_bias", "")).upper()
-    if "VERY STRONG" not in bias:
-        return False
-    if is_strong_opposite_future(metrics, side):
-        return False
-    if side == "CALL":
-        return (
-            metrics["bull_t"] >= REVERSE_VERY_STRONG_TURN_CR
-            and metrics["bear_t"] <= REVERSE_VERY_STRONG_OPPOSITE_MAX_CR
-        )
-    return (
-        metrics["bear_t"] >= REVERSE_VERY_STRONG_TURN_CR
-        and metrics["bull_t"] <= REVERSE_VERY_STRONG_OPPOSITE_MAX_CR
-    )
-
-def build_buy_alert(symbol, strike, side, reason, sl, tg):
-    emoji = emoji_for_side(side)
-    return (
-        f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-        f"**ACTION: BUY {symbol} {strike} {option_type_for_side(side)}**\n"
-        f"**SIGNAL: {side} ({reason})**\n"
-        f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**"
-    )
-
-def active_signal_for(symbol, now):
-    active = active_signals_by_symbol.get(symbol)
-    if not active:
-        return None
-    if now - active["time"] > datetime.timedelta(minutes=ACTIVE_SIGNAL_MAX_AGE_MIN):
-        active_signals_by_symbol.pop(symbol, None)
-        return None
-    return active
-
-async def handle_candidate_signal(client, target_id, symbol, strike, side, reason, sl, tg, now, created_pending_symbols, reverse_confirmed=False):
-    if not reverse_confirmed and symbol in pending_reverses_by_symbol:
-        return False
-
-    active = active_signal_for(symbol, now)
-    if not reverse_confirmed and active and active["side"] != side:
-        pending_reverses_by_symbol[symbol] = {
-            "side": side,
-            "strike": strike,
-            "reason": reason,
-            "sl": sl,
-            "tg": tg,
-            "time": now,
-            "confirmations": 0,
-        }
-        created_pending_symbols.add(symbol)
-        active_signals_by_symbol.pop(symbol, None)
-
-        msg = (
-            "⚠️ **REVERSE EXIT ONLY**\n\n"
-            f"**ACTION: EXIT {symbol}**\n"
-            f"OLD: {symbol} {active['strike']} {option_type_for_side(active['side'])}\n"
-            f"PENDING: BUY {symbol} {strike} {option_type_for_side(side)}\n"
-            "WAIT: NEXT 2MIN CONFIRMATION"
-        )
-        await safe_send(client, target_id, msg)
-        return False
-
-    await safe_send(
-        client,
-        target_id,
-        build_buy_alert(symbol, strike, side, reason, sl, tg),
-    )
-    active_signals_by_symbol[symbol] = {
-        "side": side,
-        "strike": strike,
-        "time": now,
-        "reverse": reverse_confirmed,
-    }
-    return True
-
-async def process_pending_reverse(client, target_id, symbol, metrics, now, created_pending_symbols):
-    if symbol in created_pending_symbols:
-        return
-
-    pending = pending_reverses_by_symbol.get(symbol)
-    if not pending:
-        return
-
-    side = pending["side"]
-    confirmed = reverse_flow_confirmed(metrics, side)
-    very_strong = reverse_flow_very_strong(metrics, side)
-
-    if not confirmed:
-        msg = (
-            "🚫 **REVERSE CANCELLED**\n\n"
-            f"PENDING: BUY {symbol} {pending['strike']} {option_type_for_side(side)}\n"
-            "REASON: NEXT 2MIN FLOW NOT CONFIRMED"
-        )
-        await safe_send(client, target_id, msg)
-        pending_reverses_by_symbol.pop(symbol, None)
-        return
-
-    if is_late_reverse_window(now) and not very_strong:
-        pending["confirmations"] += 1
-        if pending["confirmations"] < REVERSE_LATE_CONFIRMATIONS:
-            return
-        reason = f"REVERSE CONFIRMED {REVERSE_LATE_CONFIRMATIONS}X AFTER {REVERSE_LATE_START}"
-    else:
-        reason = "REVERSE CONFIRMED NEXT 2MIN"
-
-    pending_reverses_by_symbol.pop(symbol, None)
-    await handle_candidate_signal(
-        client,
-        target_id,
-        symbol,
-        pending["strike"],
-        side,
-        reason,
-        pending["sl"],
-        pending["tg"],
-        now,
-        created_pending_symbols,
-        reverse_confirmed=True,
-    )
 
 def side_from_bias(bias):
     up = str(bias or "").upper()
-    if "BULLISH" in up and "BEARISH" not in up:
-        return "CALL"
-    if "BEARISH" in up and "BULLISH" not in up:
-        return "PUT"
+    if ("BULLISH" in up or "🚀" in up or "🔥" in up) and "BEARISH" not in up: return "CALL"
+    if ("BEARISH" in up or "📉" in up or "🩸" in up) and "BULLISH" not in up: return "PUT"
     return None
 
-def side_from_future_flow(flow_type):
-    up = str(flow_type or "").upper()
-    if up == "FUT_BUY":
-        return "CALL"
-    if up == "FUT_SELL":
-        return "PUT"
-    return None
+# ---------------- MASTER TRIGGER LOGIC ---------------- #
 
-def side_turn_values(metrics, side):
-    if side == "CALL":
-        return metrics.get("bull_t", 0.0), metrics.get("bear_t", 0.0)
-    return metrics.get("bear_t", 0.0), metrics.get("bull_t", 0.0)
-
-def side_future_turn_values(metrics, side):
-    if side == "CALL":
-        return metrics.get("future_bull_t", 0.0), metrics.get("future_bear_t", 0.0)
-    return metrics.get("future_bear_t", 0.0), metrics.get("future_bull_t", 0.0)
-
-def component_labels_for(side):
-    return BULLISH_COMPONENTS if side == "CALL" else BEARISH_COMPONENTS
-
-def component_support(rows, side):
-    totals = {}
-    for row in rows:
-        components = row["metrics"].get("components", {})
-        for label in component_labels_for(side):
-            totals[label] = totals.get(label, 0.0) + components.get(label, {}).get("total", 0.0)
-    total = sum(totals.values())
-    biggest = max(totals.values()) if totals else 0.0
-    other = total - biggest
-    top = sorted(totals.items(), key=lambda item: item[1], reverse=True)
-    return total, other, top
-
-def itm_writing_support(rows, side):
-    label = "PUT_WR" if side == "CALL" else "CALL_WR"
-    total = 0.0
-    for row in rows:
-        total += row["metrics"].get("components", {}).get(label, {}).get("itm", 0.0)
-    return total, label
-
-def future_price_move(rows, side):
-    prices = [row.get("price") for row in rows]
-    if any(price is None for price in prices):
-        return None, None
-    raw_move = prices[-1] - prices[0]
-    side_move = raw_move if side == "CALL" else -raw_move
-    return side_move, raw_move
-
-def future_side_check(rows, side):
-    latest = rows[-1]["metrics"]
-    latest_bias = latest.get("future_bias", "")
-    latest_bias_side = side_from_bias(latest_bias)
-    strong_opp_bias = is_strong_opposite_future(latest, side)
-
-    align_turn_sum = 0.0
-    opp_turn_sum = 0.0
-    align_flow_sum = 0.0
-    opp_flow_sum = 0.0
-
-    for row in rows:
-        metrics = row["metrics"]
-        align_turn, opp_turn = side_future_turn_values(metrics, side)
-        align_turn_sum += align_turn
-        opp_turn_sum += opp_turn
-
-        flow_side = side_from_future_flow(metrics.get("future_flow_type", ""))
-        flow_cr = metrics.get("future_flow_cr", 0.0)
-        if flow_side == side:
-            align_flow_sum += flow_cr
-        elif flow_side:
-            opp_flow_sum += flow_cr
-
-    _, latest_opp_turn = side_future_turn_values(latest, side)
-    blocked = (
-        strong_opp_bias
-        or latest_opp_turn >= FUTURE_OPPOSITE_BLOCK_CR
-        or opp_flow_sum >= FUTURE_OPPOSITE_BLOCK_CR
-    )
-    confirmed = (
-        latest_bias_side == side
-        or align_turn_sum >= FUTURE_OPPOSITE_BLOCK_CR
-        or align_flow_sum >= FUTURE_OPPOSITE_BLOCK_CR
-    )
-    warning = bool(latest_bias_side and latest_bias_side != side and not strong_opp_bias)
-
-    return {
-        "blocked": blocked,
-        "confirmed": confirmed,
-        "warning": warning,
-        "future_bias": latest_bias or "NA",
-        "align_turn_sum": align_turn_sum,
-        "opp_turn_sum": opp_turn_sum,
-        "latest_opp_turn": latest_opp_turn,
-        "align_flow_sum": align_flow_sum,
-        "opp_flow_sum": opp_flow_sum,
-    }
-
-def build_flow_row(now, price, metrics):
-    return {
-        "time": now,
-        "price": price,
-        "metrics": metrics,
-    }
-
-def fmt_cr(value):
-    return f"{value:.2f}Cr"
-
-def fmt_points(value):
-    if value is None:
-        return "NA"
-    return f"{value:+.1f}"
-
-def fmt_window(rows):
-    return f"{rows[0]['time'].strftime('%H:%M')}-{rows[-1]['time'].strftime('%H:%M')} ({len(rows)} rows)"
-
-def fmt_components(top):
-    return ", ".join(f"{label} {fmt_cr(value)}" for label, value in top[:3])
-
-
-def get_side_components(rows, side):
-    wr_label = "PUT_WR" if side == "CALL" else "CALL_WR"
-    sc_label = "CALL_SC" if side == "CALL" else "PUT_SC"
-
-    itm_wr = sum(r["metrics"].get("components", {}).get(wr_label, {}).get("itm", 0.0) for r in rows)
-    otm_wr = sum(r["metrics"].get("components", {}).get(wr_label, {}).get("otm", 0.0) for r in rows)
-
-    itm_sc = sum(r["metrics"].get("components", {}).get(sc_label, {}).get("itm", 0.0) for r in rows)
-    otm_sc = sum(r["metrics"].get("components", {}).get(sc_label, {}).get("otm", 0.0) for r in rows)
-
-    return wr_label, sc_label, itm_wr, otm_wr, itm_sc, otm_sc
-
-def evaluate_direct_signals(symbol, rows, rows_5min, side):
-    latest_metrics = rows[-1]["metrics"]
-    if side_from_bias(latest_metrics.get("option_bias", "")) != side:
-        return None
-
-    turn_sum = 0.0
-    opposite_sum = 0.0
-    for row in rows:
-        turn, opposite = side_turn_values(row["metrics"], side)
-        turn_sum += turn
-        opposite_sum += opposite
-
-    if opposite_sum > 1.0:
-        return None
-
-    wr_label, sc_label, itm_wr, otm_wr, itm_sc, otm_sc = get_side_components(rows, side)
+def evaluate_master_trigger(symbol):
+    # 1. Mandatory 5MIN Sync Check
+    bn_5 = last_5min_sync["BANKNIFTY"]
+    nf_5 = last_5min_sync["NIFTY"]
     
-    # 5 MIN flow check
-    latest_5min_row = [rows_5min[-1]] if rows_5min else []
-    _, _, itm_wr_5, otm_wr_5, itm_sc_5, otm_sc_5 = get_side_components(latest_5min_row, side)
-
-    signal_type = None
-    trigger_line = ""
-
-    if otm_wr >= 15.0 and otm_wr_5 >= 1.5:
-        signal_type = "DIRECT: AGGRESSIVE OTM WRITER"
-        trigger_line = f"{wr_label} OTM {fmt_cr(otm_wr)} >= 15.00Cr (5MIN {fmt_cr(otm_wr_5)} >= 1.50Cr)"
-    elif otm_sc >= 15.0 and otm_sc_5 >= 1.5:
-        signal_type = "DIRECT: AGGRESSIVE OTM SHORT COVERING"
-        trigger_line = f"{sc_label} OTM {fmt_cr(otm_sc)} >= 15.00Cr (5MIN {fmt_cr(otm_sc_5)} >= 1.50Cr)"
-    elif itm_sc >= 10.0 and itm_sc_5 >= 1.0:
-        signal_type = "DIRECT: AGGRESSIVE ITM SHORT COVERING"
-        trigger_line = f"{sc_label} ITM {fmt_cr(itm_sc)} >= 10.00Cr (5MIN {fmt_cr(itm_sc_5)} >= 1.00Cr)"
-    elif itm_wr >= 8.0:
-        signal_type = "DIRECT: AGGRESSIVE ITM WRITER"
-        trigger_line = f"{wr_label} ITM {fmt_cr(itm_wr)} >= 8.00Cr"
-
-    if not signal_type:
-        return None
-
-    future_check = future_side_check(rows, side)
-    _, _, top_components = component_support(rows, side)
-
-    return {
-        "mode": "FULL",
-        "symbol": symbol,
-        "side": side,
-        "rows": rows,
-        "turn_sum": turn_sum,
-        "opposite_sum": opposite_sum,
-        "signal_label": signal_type,
-        "trigger_line": trigger_line,
-        "option_bias": latest_metrics.get("option_bias", "NA"),
-        "future": future_check,
-        "latest_price": rows[-1].get("price"),
-        "is_direct": True,
-        "top_components": top_components
-    }
-
-def evaluate_standard_signal(symbol, rows, side):
-    latest_metrics = rows[-1]["metrics"]
-    if side_from_bias(latest_metrics.get("option_bias", "")) != side:
-        return None
-
-    turn_sum = 0.0
-    opposite_sum = 0.0
-    for row in rows:
-        turn, opposite = side_turn_values(row["metrics"], side)
-        turn_sum += turn
-        opposite_sum += opposite
-
-    if turn_sum < 10.0 or opposite_sum > 1.0:
-        return None
-
-    wr_label, sc_label, itm_wr, otm_wr, itm_sc, otm_sc = get_side_components(rows, side)
-
-    itm_condition = (itm_wr >= 5.0) or (itm_sc >= 5.0)
-    otm_condition = (otm_wr + otm_sc) >= 5.0
-
-    if not (itm_condition and otm_condition):
-        return None
-
-    move_min = FULL_FUT_MOVE_POINTS.get(symbol, FULL_FUT_MOVE_POINTS["BANKNIFTY"])
-    side_move, raw_move = future_price_move(rows, side)
+    bn_bias = side_from_bias(bn_5["bias"])
+    nf_bias = side_from_bias(nf_5["bias"])
     
-    if side_move is None or side_move < move_min:
-        return None
+    if not bn_bias or bn_bias != nf_bias: return None # No sync
+    side = bn_bias
+    
+    # 2. Aggressive Futures Lead Fast-Track
+    fut_vol = bn_5["fut_bull"] if side == "CALL" else bn_5["fut_bear"]
+    if fut_vol >= FUTURES_LEAD_5MIN:
+        return {"side": side, "label": "5MIN FUTURES LEAD"}
 
-    future_check = future_side_check(rows, side)
-    if future_check["blocked"]:
-        return None
+    # 3. 2MIN Cumulative Volume Confirmation
+    hist = flow_history_2min[symbol]
+    if len(hist) < 3: return None
+    
+    cum_vol = sum(h["bull_t"] if side == "CALL" else h["bear_t"] for h in hist[-3:])
+    opp_vol = sum(h["bear_t"] if side == "CALL" else h["bull_t"] for h in hist[-3:])
+    
+    if cum_vol >= VOL_2MIN_CUMULATIVE and opp_vol < 2.0:
+        return {"side": side, "label": "STRUCTURAL SYNC + VOL"}
         
-    _, _, top_components = component_support(rows, side)
-
-    itm_trigger_str = f"{wr_label} ITM {fmt_cr(itm_wr)}" if itm_wr >= 5.0 else f"{sc_label} ITM {fmt_cr(itm_sc)}"
-    
-    return {
-        "mode": "FULL",
-        "symbol": symbol,
-        "side": side,
-        "rows": rows,
-        "turn_sum": turn_sum,
-        "opposite_sum": opposite_sum,
-        "signal_label": "STANDARD BALANCED FLOW",
-        "option_bias": latest_metrics.get("option_bias", "NA"),
-        "future": future_check,
-        "latest_price": rows[-1].get("price"),
-        "is_direct": False,
-        "itm_trigger_str": f"{itm_trigger_str} >= 5.00Cr",
-        "otm_total_str": f"{fmt_cr(otm_wr + otm_sc)} >= 5.00Cr",
-        "top_components": top_components,
-        "side_move": side_move,
-        "move_min": move_min
-    }
-
-def evaluate_full_signal(symbol, active=None):
-    rows = flow_rows_2min.get(symbol, [])
-    rows_5min = flow_rows_5min.get(symbol, [])
-    
-    for window in (1, 2):
-        if len(rows) < window:
-            continue
-        recent = rows[-window:]
-        candidates = [
-            candidate for candidate in (
-                evaluate_direct_signals(symbol, recent, rows_5min, "CALL"),
-                evaluate_direct_signals(symbol, recent, rows_5min, "PUT"),
-            ) if candidate
-        ]
-        if candidates:
-            return max(candidates, key=lambda item: item["turn_sum"])
-
-    min_window = max(1, TURN_MIN_WINDOW)
-    max_window = max(min_window, TURN_MAX_WINDOW)
-    for window in range(min_window, max_window + 1):
-        if len(rows) < window:
-            continue
-        recent = rows[-window:]
-        candidates = [
-            candidate for candidate in (
-                evaluate_standard_signal(symbol, recent, "CALL"),
-                evaluate_standard_signal(symbol, recent, "PUT"),
-            ) if candidate
-        ]
-        if candidates:
-            return max(candidates, key=lambda item: item["turn_sum"])
-            
     return None
-
-def evaluate_watch_signal(symbol):
-    rows = flow_rows_2min.get(symbol, [])
-    if len(rows) < 2:
-        return None
-    recent = rows[-2:]
-    
-    for side in ("CALL", "PUT"):
-        latest_metrics = recent[-1]["metrics"]
-        if side_from_bias(latest_metrics.get("option_bias", "")) != side:
-            continue
-            
-        turn_sum = 0.0
-        opposite_sum = 0.0
-        for row in recent:
-            turn, opposite = side_turn_values(row["metrics"], side)
-            turn_sum += turn
-            opposite_sum += opposite
-            
-        if turn_sum >= WATCH_TURN_MIN_CR and opposite_sum <= WATCH_OPPOSITE_MAX_CR:
-            component_total, _, top_components = component_support(recent, side)
-            if component_total >= WATCH_COMPONENT_MIN_CR:
-                side_move, raw_move = future_price_move(recent, side)
-                move_min = WATCH_FUT_MOVE_POINTS.get(symbol, WATCH_FUT_MOVE_POINTS["BANKNIFTY"])
-                if side_move is not None and side_move >= move_min:
-                    return {
-                        "side": side,
-                        "rows": recent,
-                        "turn_sum": turn_sum,
-                        "turn_min": WATCH_TURN_MIN_CR,
-                        "opposite_sum": opposite_sum,
-                        "opposite_max": WATCH_OPPOSITE_MAX_CR,
-                        "component_total": component_total,
-                        "component_min": WATCH_COMPONENT_MIN_CR,
-                        "side_move": side_move,
-                        "move_min": move_min,
-                        "top_components": top_components,
-                        "future": future_side_check(recent, side)
-                    }
-    return None
-
-def strategy_duplicate(symbol, mode, side, now, minutes):
-    key = (symbol, mode, side)
-    last = last_strategy_alerts.get(key)
-    if last and now - last < datetime.timedelta(minutes=minutes):
-        return True
-    last_strategy_alerts[key] = now
-    return False
-
-def build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed):
-    side = signal["side"]
-    emoji = emoji_for_side(side)
-    future = signal["future"]
-    signal_label = signal.get("signal_label", "FULL 2MIN OPTION+FUTURE")
-    reverse_line = "\n**REVERSE CONFIRMED FULL OPPOSITE**" if reverse_confirmed else ""
-    
-    confidence = "CONFIRMED" if future["confirmed"] else "NEUTRAL FUTURE"
-    if future["warning"]:
-        confidence = "OPTION STRONG, FUTURE WARNING"
-        
-    if signal.get("is_direct"):
-        middle_section = (
-            f"OPTION: {fmt_cr(signal['turn_sum'])} Turn, opposite {fmt_cr(signal['opposite_sum'])} <= 1.00Cr\n"
-            f"BIAS: {signal['option_bias']}\n"
-            f"DIRECT TRIGGER:\n"
-            f" • {signal['trigger_line']}\n"
-            f"FUTURE: move skipped for Direct Trigger, bias {future['future_bias']} ({confidence})\n"
-        )
-    else:
-        middle_section = (
-            f"OPTION: {fmt_cr(signal['turn_sum'])} >= 10.00Cr, opposite {fmt_cr(signal['opposite_sum'])} <= 1.00Cr\n"
-            f"BIAS: {signal['option_bias']}\n"
-            f"COMPONENT SPLIT:\n"
-            f" • ITM WR/SC: {signal['itm_trigger_str']}\n"
-            f" • OTM WR+SC: {signal['otm_total_str']}\n"
-            f"TOP: {fmt_components(signal.get('top_components', []))}\n"
-            f"FUTURE: move {fmt_points(signal.get('side_move'))} pts >= {signal.get('move_min', 0):.0f}, "
-            f"bias {future['future_bias']} ({confidence})\n"
-        )
-
-    return (
-        f"{emoji} **INSTITUTIONAL DUAL MATCH** {emoji}\n\n"
-        f"**ACTION: BUY {symbol} {strike} {option_type_for_side(side)}**\n"
-        f"**SIGNAL: {side} ({signal_label})**"
-        f"{reverse_line}\n"
-        f"WINDOW: {fmt_window(signal['rows'])}\n"
-        f"{middle_section}"
-        f"🛡️ **SL: {sl} pts | 🎯 TARGET: {tg} pts**"
-    )
-
-def build_watch_alert(symbol, signal, active=None):
-    side = signal["side"]
-    future = signal["future"]
-    action = f"**ACTION: EXIT {symbol}**\n" if active else "**ACTION: WATCH ONLY**\n"
-    active_line = ""
-    if active:
-        active_line = f"OLD: {symbol} {active['strike']} {option_type_for_side(active['side'])}\n"
-
-    return (
-        f"⚠️ **2MIN WATCH {'EXIT' if active else 'ONLY'}**\n\n"
-        f"{action}"
-        f"{active_line}"
-        f"SIDE: {side} {option_type_for_side(side)}\n"
-        f"WINDOW: {fmt_window(signal['rows'])}\n"
-        f"OPTION: {fmt_cr(signal['turn_sum'])} >= {fmt_cr(signal['turn_min'])}, "
-        f"opposite {fmt_cr(signal['opposite_sum'])} <= {fmt_cr(signal['opposite_max'])}\n"
-        f"COMPONENT: {fmt_cr(signal['component_total'])} >= {fmt_cr(signal['component_min'])}\n"
-        f"FUTURE: move {fmt_points(signal['side_move'])} pts >= {signal['move_min']:.0f}, "
-        f"bias {future['future_bias']}\n"
-        f"TOP: {fmt_components(signal['top_components'])}"
-    )
-
-def build_reverse_exit_alert(symbol, active, signal):
-    return (
-        "⚠️ **REVERSE EXIT**\n\n"
-        f"**ACTION: EXIT {symbol}**\n"
-        f"OLD: {symbol} {active['strike']} {option_type_for_side(active['side'])}\n"
-        f"NEW: BUY {symbol} {get_atm(signal['latest_price'], symbol) if signal['latest_price'] else 'ATM'} "
-        f"{option_type_for_side(signal['side'])}\n"
-        f"REASON: {signal.get('signal_label', 'FULL 2MIN OPTION+FUTURE')}"
-    )
-
-async def send_full_signal(client, target_id, symbol, signal, now):
-    side = signal["side"]
-    active = active_signal_for(symbol, now)
-    reverse_confirmed = bool(active and active["side"] != side)
-
-    if not reverse_confirmed and strategy_duplicate(symbol, "FULL", side, now, FULL_DUP_MIN):
-        return False
-
-    strike = get_atm(signal["latest_price"], symbol) if signal["latest_price"] else "ATM"
-    sl, tg = risk_points_for(symbol)
-    if reverse_confirmed:
-        await safe_send(client, target_id, build_reverse_exit_alert(symbol, active, signal))
-    await safe_send(
-        client,
-        target_id,
-        build_full_alert(symbol, strike, signal, sl, tg, reverse_confirmed),
-    )
-    active_signals_by_symbol[symbol] = {
-        "side": side,
-        "strike": strike,
-        "time": now,
-        "reverse": reverse_confirmed,
-    }
-    last_strategy_alerts[(symbol, "FULL", side)] = now
-    pending_reverses_by_symbol.pop(symbol, None)
-    return True
-
-async def send_watch_signal(client, target_id, symbol, signal, now):
-    side = signal["side"]
-    active = active_signal_for(symbol, now)
-    exit_active = active and active["side"] != side
-    mode = "WATCH_EXIT" if exit_active else "WATCH"
-
-    if strategy_duplicate(symbol, mode, side, now, WATCH_DUP_MIN):
-        return False
-
-    await safe_send(
-        client,
-        target_id,
-        build_watch_alert(symbol, signal, active if exit_active else None),
-    )
-    if exit_active:
-        active_signals_by_symbol.pop(symbol, None)
-        pending_reverses_by_symbol.pop(symbol, None)
-    return True
-
-# ---------------- MAIN HANDLER ---------------- #
 
 async def main():
+    global daily_trade_count, active_trade, pending_trade
     client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
     await client.start()
-    try:
-        target_entity = await resolve_target_entity(client, TARGET_BOT_REF)
-        print(f"✅ TARGET_BOT resolved: {getattr(target_entity, 'id', TARGET_BOT_REF)}", flush=True)
-    except Exception as e:
-        target_entity = TARGET_BOT_REF
-        print(f"❌ TARGET_BOT resolve failed: {e}", flush=True)
-        print("Set TARGET_BOT to the exact @username, t.me link, numeric -100 channel ID, or exact dialog name visible to this Telegram account.", flush=True)
-    print("🚀 SCANNER ACTIVE: 2MIN option+future strategy for BANKNIFTY/NIFTY")
+    target_entity = await resolve_target_entity(client, TARGET_BOT_REF)
+    print("🏆 MASTER SCANNER ACTIVE: Structural Synchrony Logic Enabled (Max 3 Trades)")
 
     @client.on(events.NewMessage(chats=SOURCE_IDS))
     async def handler(event):
+        global daily_trade_count, active_trade, pending_trade
         text = event.message.text
         if not text: return
         now = datetime.datetime.now(IST)
-        
-        upper_text = text.upper()
-        if "2 MIN" in upper_text:
-            interval = 2
-        elif "5 MIN" in upper_text:
-            interval = 5
-        else:
+
+        # A. PROCESS 5 MIN DATA
+        if "5 MIN" in text.upper():
+            for s in INDEX_SYMBOLS:
+                sec = extract_instrument_section(text, s)
+                m = parse_flow_metrics(sec)
+                if m:
+                    last_5min_sync[s] = {"bias": m["opt_bias"], "fut_bull": m["fut_bull"], "fut_bear": m["fut_bear"]}
             return
 
-        max_keep_rows = max(TURN_MAX_WINDOW + 3, 8)
-        for symbol in STRATEGY_SYMBOLS:
-            if symbol not in WATCH_SYMBOLS:
-                continue
+        # B. PROCESS 2 MIN DATA
+        if "2 MIN" in text.upper():
+            current_prices = {}
+            current_metrics = {}
+            for s in INDEX_SYMBOLS:
+                sec = extract_instrument_section(text, s)
+                m = parse_flow_metrics(sec)
+                p = get_future_price(sec, s)
+                if m and p:
+                    flow_history_2min[s].append(m)
+                    if len(flow_history_2min[s]) > 10: flow_history_2min[s].pop(0)
+                    current_prices[s] = p
+                    current_metrics[s] = m
 
-            section = extract_instrument_section(text, symbol)
-            metrics = parse_flow_metrics(section)
-            if not metrics:
-                continue
+            # 1. Exit Logic
+            if active_trade:
+                s = active_trade["symbol"]
+                m = current_metrics.get(s)
+                if m:
+                    opp = m["bear_t"] if active_trade["side"] == "CALL" else m["bull_t"]
+                    if opp >= OPPOSITE_EXIT_THRESHOLD:
+                        await client.send_message(target_entity, f"🛑 **MASTER EXIT {s}**: Reversal {opp:.2f}Cr detected.")
+                        active_trade = None
 
-            price = get_future_price(section, symbol)
-            
-            if interval == 2:
-                rows = flow_rows_2min.setdefault(symbol, [])
-            else:
-                rows = flow_rows_5min.setdefault(symbol, [])
-                
-            rows.append(build_flow_row(now, price, metrics))
-            if len(rows) > max_keep_rows:
-                del rows[:-max_keep_rows]
+            # 2. Pending Verification (Wait 4 mins / 2 windows)
+            if pending_trade:
+                s = pending_trade["symbol"]
+                p = current_prices.get(s)
+                m = current_metrics.get(s)
+                if p and m:
+                    pending_trade["wait_count"] += 1
+                    # Price reversal check
+                    rev = (pending_trade["side"] == "CALL" and p < pending_trade["t0_price"]) or \
+                          (pending_trade["side"] == "PUT" and p > pending_trade["t0_price"])
+                    if rev:
+                        pending_trade = None
+                    elif pending_trade["wait_count"] >= PRICE_HOLD_WINDOWS:
+                        # TRIGGER FINAL ALERT
+                        side = pending_trade["side"]
+                        strike = get_atm(p, s)
+                        msg = (f"💎 **MASTER TRADE ALERT** 💎\n\n"
+                               f"**ACTION: BUY {s} {strike} {'CE' if side == 'CALL' else 'PE'}**\n"
+                               f"REASON: Structural Breakout Confirmed\n"
+                               f"PRICE: {p} | SL: 60 pts")
+                        await client.send_message(target_entity, msg)
+                        active_trade = {"symbol": s, "side": side, "entry": p}
+                        daily_trade_count += 1
+                        pending_trade = None
 
-            if interval == 2:
-                active = active_signal_for(symbol, now)
-                full_signal = evaluate_full_signal(symbol, active)
-                if full_signal:
-                    await send_full_signal(client, target_entity, symbol, full_signal, now)
-                    continue
-
-                watch_signal = evaluate_watch_signal(symbol)
-                if watch_signal:
-                    await send_watch_signal(client, target_entity, symbol, watch_signal, now)
+            # 3. New Trigger Search
+            if not active_trade and not pending_trade and daily_trade_count < DAILY_TRADE_LIMIT:
+                for s in INDEX_SYMBOLS:
+                    trigger = evaluate_master_trigger(s)
+                    if trigger:
+                        pending_trade = {
+                            "symbol": s, 
+                            "side": trigger["side"], 
+                            "t0_price": current_prices[s],
+                            "wait_count": 0
+                        }
+                        break
 
     await client.run_until_disconnected()
 
