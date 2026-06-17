@@ -7,11 +7,34 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 # ---------------- CONFIG ---------------- #
-API_ID = int(os.getenv("TG_API_ID"))
-API_HASH = os.getenv("TG_API_HASH")
-SESSION_STR = os.getenv("TG_SESSION_STR")
+def required_env(name):
+    value = os.getenv(name)
+    if value is None or not str(value).strip():
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return str(value).strip()
 
-SOURCE_IDS = [int(i.strip()) for i in os.getenv("SOURCE_BOT").split(",")]
+
+def required_env_int(name):
+    value = required_env(name)
+    try:
+        return int(value)
+    except ValueError as e:
+        raise RuntimeError(f"Environment variable {name} must be an integer") from e
+
+
+def parse_source_ids(value):
+    raw = required_env(value)
+    ids = [int(i.strip()) for i in raw.split(",") if i.strip()]
+    if not ids:
+        raise RuntimeError("SOURCE_BOT must contain at least one Telegram source id")
+    return ids
+
+
+API_ID = required_env_int("TG_API_ID")
+API_HASH = required_env("TG_API_HASH")
+SESSION_STR = required_env("TG_SESSION_STR")
+
+SOURCE_IDS = parse_source_ids("SOURCE_BOT")
 TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
 
 IST = pytz.timezone("Asia/Kolkata")
