@@ -3,6 +3,9 @@ import re
 import asyncio
 import datetime
 import pytz
+import json
+import uuid
+import requests
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -36,6 +39,12 @@ SESSION_STR = required_env("TG_SESSION_STR")
 
 SOURCE_IDS = parse_source_ids("SOURCE_BOT")
 TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
+
+# Matrix / Element X Credentials
+MATRIX_HOMESERVER = os.getenv("MATRIX_HOMESERVER", "https://matrix.org")
+MATRIX_ACCESS_TOKEN = os.getenv("MATRIX_ACCESS_TOKEN", "")
+# Check for both standard name and your custom name 'banknifty-deshboard'
+MATRIX_ROOM_ID = os.getenv("banknifty-deshboard") or os.getenv("MATRIX_ROOM_ID", "")
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -240,10 +249,35 @@ def get_otm_dual_signal(metrics, short_lbl):
     return None
 
 async def safe_send(client, target_id, message):
+    # Send to Telegram
     try:
         await client.send_message(target_id, message)
     except Exception as e:
-        print(f"❌ Delivery Error: {e}")
+        print(f"❌ Telegram Delivery Error: {e}")
+
+    # Send to Matrix / Element X
+    if MATRIX_ACCESS_TOKEN and MATRIX_ROOM_ID:
+        try:
+            txn_id = str(uuid.uuid4())
+            url = f"{MATRIX_HOMESERVER}/_matrix/client/v3/rooms/{MATRIX_ROOM_ID}/send/m.room.message/{txn_id}"
+            headers = {
+                "Authorization": f"Bearer {MATRIX_ACCESS_TOKEN}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "msgtype": "m.text",
+                "body": message
+            }
+            # Run in executor since requests is blocking
+            loop = asyncio.get_event_loop()
+            res = await loop.run_in_executor(
+                None, 
+                lambda: requests.put(url, headers=headers, data=json.dumps(payload), timeout=10)
+            )
+            if res.status_code != 200:
+                print(f"❌ Matrix Delivery Error: {res.status_code} - {res.text}")
+        except Exception as e:
+            print(f"❌ Matrix Exception: {e}")
 
 # ---------------- MAIN HANDLER ---------------- #
 
