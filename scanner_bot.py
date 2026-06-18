@@ -43,6 +43,9 @@ TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
 # Matrix / Element X Credentials
 MATRIX_HOMESERVER = os.getenv("MATRIX_HOMESERVER", "https://matrix.org")
 MATRIX_ACCESS_TOKEN = os.getenv("MATRIX_ACCESS_TOKEN", "")
+MATRIX_USER = os.getenv("MATRIX_USER", "")
+MATRIX_PASS = os.getenv("MATRIX_PASS", "")
+MATRIX_TOKEN_FILE = "matrix_access_token.txt"
 # Check for both standard name and your custom name 'banknifty-deshboard'
 MATRIX_ROOM_ID = os.getenv("banknifty-deshboard") or os.getenv("MATRIX_ROOM_ID", "")
 
@@ -248,6 +251,55 @@ def get_otm_dual_signal(metrics, short_lbl):
         }
     return None
 
+# ---------------- MATRIX UTILS ---------------- #
+
+def perform_matrix_login():
+    if not MATRIX_USER or not MATRIX_PASS:
+        return None
+    
+    login_url = f"{MATRIX_HOMESERVER}/_matrix/client/v3/login"
+    payload = {
+        "type": "m.login.password",
+        "user": MATRIX_USER,
+        "password": MATRIX_PASS,
+        "initial_device_display_name": "BankNiftyDashboardAuto"
+    }
+    
+    try:
+        response = requests.post(login_url, json=payload, timeout=15)
+        if response.status_code == 200:
+            token = response.json().get("access_token")
+            if token:
+                with open(MATRIX_TOKEN_FILE, "w") as f:
+                    f.write(token)
+                print("✅ Matrix auto-login successful.")
+                return token
+        else:
+            print(f"❌ Matrix auto-login failed: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"❌ Matrix auto-login error: {e}")
+    return None
+
+def get_matrix_token():
+    # 1. Try to read from file first
+    token = None
+    if os.path.exists(MATRIX_TOKEN_FILE):
+        try:
+            with open(MATRIX_TOKEN_FILE, "r") as f:
+                token = f.read().strip()
+        except Exception as e:
+            print(f"❌ Error reading {MATRIX_TOKEN_FILE}: {e}")
+    
+    # 2. Fallback to environment variable
+    if not token:
+        token = MATRIX_ACCESS_TOKEN
+        
+    # 3. Auto-login if still no token
+    if not token:
+        token = perform_matrix_login()
+        
+    return token
+
 async def safe_send(client, target_id, message):
     # Send to Telegram
     try:
@@ -256,24 +308,34 @@ async def safe_send(client, target_id, message):
         print(f"❌ Telegram Delivery Error: {e}")
 
     # Send to Matrix / Element X
-    if MATRIX_ACCESS_TOKEN and MATRIX_ROOM_ID:
+    token = get_matrix_token()
+    if token and MATRIX_ROOM_ID:
         try:
             txn_id = str(uuid.uuid4())
             url = f"{MATRIX_HOMESERVER}/_matrix/client/v3/rooms/{MATRIX_ROOM_ID}/send/m.room.message/{txn_id}"
             headers = {
-                "Authorization": f"Bearer {MATRIX_ACCESS_TOKEN}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
             }
             payload = {
                 "msgtype": "m.text",
                 "body": message
             }
+            
+            def do_request(h):
+                return requests.put(url, headers=h, data=json.dumps(payload), timeout=10)
+
             # Run in executor since requests is blocking
             loop = asyncio.get_event_loop()
-            res = await loop.run_in_executor(
-                None, 
-                lambda: requests.put(url, headers=headers, data=json.dumps(payload), timeout=10)
-            )
+            res = await loop.run_in_executor(None, lambda: do_request(headers))
+
+            if res.status_code == 401:
+                print("⚠️ Matrix token expired. Attempting auto-login...")
+                new_token = perform_matrix_login()
+                if new_token:
+                    headers["Authorization"] = f"Bearer {new_token}"
+                    res = await loop.run_in_executor(None, lambda: do_request(headers))
+
             if res.status_code != 200:
                 print(f"❌ Matrix Delivery Error: {res.status_code} - {res.text}")
         except Exception as e:
