@@ -41,13 +41,15 @@ SOURCE_IDS = parse_source_ids("SOURCE_BOT")
 TARGET_BOT_RAW = os.getenv("TARGET_BOT", "").strip()
 
 # Matrix / Element X Credentials
-MATRIX_HOMESERVER = os.getenv("MATRIX_HOMESERVER", "https://matrix.org")
+MATRIX_HOMESERVER = os.getenv("MATRIX_HOMESERVER", "https://matrix.org").rstrip("/")
 MATRIX_ACCESS_TOKEN = os.getenv("MATRIX_ACCESS_TOKEN", "")
 MATRIX_USER = os.getenv("MATRIX_USER", "")
 MATRIX_PASS = os.getenv("MATRIX_PASS", "")
-MATRIX_TOKEN_FILE = "matrix_access_token.txt"
-# Check for both standard name and your custom name 'banknifty-deshboard'
-MATRIX_ROOM_ID = os.getenv("banknifty-deshboard") or os.getenv("MATRIX_ROOM_ID", "")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MATRIX_TOKEN_FILE = os.path.join(BASE_DIR, "matrix_access_token.txt")
+MATRIX_TOKEN_MAX_AGE_HOURS = int(os.getenv("MATRIX_TOKEN_MAX_AGE_HOURS", "20"))
+# Prefer the standard env name; keep the old custom name as a fallback.
+MATRIX_ROOM_ID = os.getenv("MATRIX_ROOM_ID", "") or os.getenv("banknifty-deshboard", "")
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -280,25 +282,51 @@ def perform_matrix_login():
         print(f"❌ Matrix auto-login error: {e}")
     return None
 
-def get_matrix_token():
-    # 1. Try to read from file first
-    token = None
+def clear_matrix_token_file():
+    try:
+        if os.path.exists(MATRIX_TOKEN_FILE):
+            os.remove(MATRIX_TOKEN_FILE)
+    except Exception as e:
+        print(f"❌ Error clearing {MATRIX_TOKEN_FILE}: {e}")
+
+def matrix_token_file_is_fresh():
+    if MATRIX_TOKEN_MAX_AGE_HOURS <= 0:
+        return True
+    try:
+        age = datetime.datetime.now() - datetime.datetime.fromtimestamp(
+            os.path.getmtime(MATRIX_TOKEN_FILE)
+        )
+        return age.total_seconds() < MATRIX_TOKEN_MAX_AGE_HOURS * 3600
+    except Exception:
+        return False
+
+def read_matrix_token_file():
     if os.path.exists(MATRIX_TOKEN_FILE):
         try:
             with open(MATRIX_TOKEN_FILE, "r") as f:
-                token = f.read().strip()
+                return f.read().strip()
         except Exception as e:
             print(f"❌ Error reading {MATRIX_TOKEN_FILE}: {e}")
-    
-    # 2. Fallback to environment variable
-    if not token:
-        token = MATRIX_ACCESS_TOKEN
-        
-    # 3. Auto-login if still no token
-    if not token:
+    return None
+
+def get_matrix_token(force_refresh=False):
+    if force_refresh:
+        clear_matrix_token_file()
+
+    if not force_refresh and matrix_token_file_is_fresh():
+        token = read_matrix_token_file()
+        if token:
+            return token
+
+    if MATRIX_USER and MATRIX_PASS:
         token = perform_matrix_login()
-        
-    return token
+        if token:
+            return token
+
+    if not force_refresh and MATRIX_ACCESS_TOKEN:
+        return MATRIX_ACCESS_TOKEN
+
+    return None
 
 async def safe_send(client, target_id, message):
     # Send to Telegram
@@ -329,9 +357,9 @@ async def safe_send(client, target_id, message):
             loop = asyncio.get_event_loop()
             res = await loop.run_in_executor(None, lambda: do_request(headers))
 
-            if res.status_code == 401:
-                print("⚠️ Matrix token expired. Attempting auto-login...")
-                new_token = perform_matrix_login()
+            if res.status_code in (401, 403):
+                print(f"⚠️ Matrix token rejected ({res.status_code}). Attempting auto-login...")
+                new_token = get_matrix_token(force_refresh=True)
                 if new_token:
                     headers["Authorization"] = f"Bearer {new_token}"
                     res = await loop.run_in_executor(None, lambda: do_request(headers))
